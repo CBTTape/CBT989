@@ -1,0 +1,1225 @@
+ /*                                                                rexx
+ Willow Find-member (WFM)
+ Locate Member dialog
+
+ See the WFMHIST member for a list of updates.
+
+ Member history
+  2024-11-22  Better key/mask handling in MBRDATA part for much
+               improved GET performance.
+              Show creation in for for db.
+  2024-12-09  Fix bad linecmd selection after WHERE.
+              New VOL lcmd DD (datasets in db)
+              Fix SETLIB selection issue
+
+ */
+ /* wfmver and wfmbuild,  see call to wfmgset later */
+
+ /* check that only one instance is running */
+ if BpxWdyn('info dd(WFMLIB)')=0 then do
+   say 'Warning, another instance has been detected',
+       '- dialog terminating'
+   exit 0
+ end
+
+ numeric digits 12
+ parse value '1000 0 0 0' with $maxmatch _maxrc _istso _isispf ddlist
+ Address IspExec "Control errors return"
+ vref.=0
+ base.0=0
+ parse value 'N' with genopt err dsninfo. sort. $wfmdb,
+   $wfmsetlb $wfmsetl $nextcmd
+ parse source . . $me . $wfmlib input. .
+ "qstack"
+ wfminitqstk=rc
+ signal on syntax  name PgmSyntax
+ Signal on novalue name PgmNoVal
+
+ /* parse parameters, set the SETLIB var  */
+ arg $mp
+ parse value ' '$mp' ' with p1 ' SETLIB('$setlib')' p2
+ parse value ' 'p1 p2' ' with p1 ' CHKVER('$chkver')' p2
+ $mp=space(p1 p2)
+
+ /* alloc WFM libs */
+ if $setlib='' then call BpxWdyn 'info dd(WFMSETLB) inrtdsn($setlib)'
+ if $setlib='' then $setlib=$wfmlib
+ cc=bpxwdyn('alloc dd(WFMSETLB) da('$setlib') shr reuse')
+ if cc<>0 then exit xmsg('alloc WFMSETLB da' $setlib 'failed rc' cc)
+ ddlist=ddlist 'WFMSETLB'
+
+ /* allocate dialog datasets */
+ if BpxWdyn('info dd(WFMLIB)')<>0 then do
+   if BpxWdyn('alloc da('$wfmlib') dd(WFMLIB) shr')<>0,
+     then call close 'Alloc' $wfmlib 'failed',8
+   ddlist=ddlist 'WFMLIB'
+   d=$wfmlib
+   if $setlib<>'' then d=$setlib d
+   "altlib act appl(exec) da("requotel(d)")"
+   if rc<>0 then call close 'ALTLIB rc' rc,8
+   ddlist=ddlist 'ALTLIB'
+   address ispexec "libdef ispplib library id(WFMLIB)"
+   if rc<>0 then call close 'Libdef ISPPLIB rc' rc zerrlm
+   ddlist=ddlist 'ISPPLIB'
+   address ispexec "libdef ispslib library id(WFMLIB)"
+   if rc<>0 then call close 'Libdef ISPSLIB rc' rc zerrlm
+   ddlist=ddlist 'ISPSLIB'
+ end
+ cc=BpxWdyn('info dd(WFMLIB) inrtdsn($WFMLIB)')
+
+ $WFMLOAD=''
+ Signal off novalue
+ Signal off syntax
+
+ Interpret WfmGset()              /* load all settings                    */
+ if $rc>1 then call close ,$rc
+ upper wfmload
+ wfmver   = $wfmver
+ signal on syntax  name PgmSyntax
+ signal on novalue name PgmNoVal
+ wfmbuild = $wfmver $wfmbdate
+ $wfmsetlb= word($setlib   $wfmsetlb,1)          /* local settings           */
+ $wfmsetl = word($wfmsetlb $wfmlib,1)            /* local settings           */
+ if $WFMLOAD<>''  & $WFMLOAD<>'NULLFILE' & $WFMLOAD<>'SYS1.LINKLIB' then do
+   if sysdsn("'"$WFMLOAD"'")='OK'  then do
+     address ispexec "libdef ispllib dataset id('"$WFMLOAD"')  stack"
+     if rc<>0 then call close 'Libdef ISPLLIB' $WFMLOAD  'rc' rc zerrlm
+     ddlist=ddlist 'ISPLLIB'
+   end
+   else say 'Loadlib' $WFMLOAD  'not found'
+ end
+ if PdaInit()<>0 then exit close()               /* init panel vars          */
+ sortpgm=WfmSortP()                              /* interpreted sort pgm     */
+
+ /* Check software versions */
+ if $chkver='Y' then do
+   parse value RxVsamBa('VERSION') with .'.'v'.'.
+   if v<031 then say 'RXVSAMBA build' v 'is too low'
+ end
+
+ /* allocate database */
+ cc=Bpxwdyn('alloc dd('$wfmdd') da('$WFMDB') shr reuse')
+ if cc<>0 then say '*Alloc DB' $WFMDB 'failed rc' cc
+ else ddlist=ddlist $wfmdd
+
+ /* screen definitions */
+ @ui1c='turq'
+ @ui1h='uscore'
+ $globalv='pdaattr pdascrw pdamaxd @ui1c @ui1h $dbdparse $dbmparse zscrmaxd'
+ Address IspExec "vget (zscrmaxd zscrmaxw)"
+ /* other definitions */
+ Call SetDefs
+ parse var $mp =1 p1 p2
+ if wordpos(p1,'DSN MBR VOL ADM KEY')>0 then parse var $mp $what pselect
+ else parse value 'MBR' $mp with $what pselect
+
+ /* start dialog */
+ Call MainDialog
+ Call Close
+
+ /* close */
+Close:
+ signal off syntax
+ signal off novalue
+ parse arg _msg,_rc
+ if _msg<>'' then say _msg
+ address Ispexec "QLibdef ispplib"
+ "qstack"
+ n=rc -1
+ if datatype(wfminitqstk)='NUM' then ,
+ do wfminitqstk
+   "delstack"
+ end
+ if ddlist<>'' then do
+   upper ddlist
+   do ddn=words(ddlist) to 1 by -1
+     dd=word(ddlist,ddn)
+     if left(dd,3)='ISP' then address Ispexec "Libdef" dd
+     else if dd='ALTLIB' then address TSO "altlib deact appl(exec)"
+     else call Bpxwdyn 'free dd('dd')'
+   end
+ end
+ Exit word(_rc 0,1)
+
+PgmSyntax:
+ trace off
+ signal off syntax
+ say '*Syntax' rc 'in line' sigl':' Errortext(rc)
+ say Sourceline(sigl)
+ Signal close
+
+PgmNoVal:
+ trace off
+ say '*Novalue raised for line' sigl '-'
+ say strip(sourceline(sigl),'t')
+ signal off novalue
+ Signal close
+
+/*
+   Main display
+*/
+MainDialog:
+ scrl.0=0
+ savesel=''
+ savegop=''
+ Call SetPfk
+ pdahelp='WFMHELP1'
+ do $mbrmain=1 to 999999
+   trace off
+   if pselect<>savesel then do
+     drop base. scrl.
+     parse value 0 0 with base.0 scrl.0
+     if pselect<>'' | $what='ADM' then Interpret "Call" $what"data(pselect)"
+   end
+   /* make panel */
+   Call PdareInit                                /* reset buffer etc         */
+   if zscrmaxd>30 then Call Pdaline ''
+   if header2.$what<>'' & pselect<>'' then Call Pdaline header2.$what
+   if input.$what<>'' then do
+     p=''
+     Call Pdaline input.$what @tb || 'Descrete value or value* or mask',
+          '(mask chars are % and *)'
+     Call Pdaline copies(' ',length(input.$what)) @tb,
+                 || 'If mask in pos 1 then search will take a while'
+   end
+   if pcmdt.$what<>'' then,
+     Call Pdaline @tg'Primary cmds'@tt || pcmdt.$what,,
+                    '             ' pcmds.$what,'#'
+   if lcmdt.$what<>'' then,
+     Call Pdaline @tg'Line cmds   '@tt || lcmdt.$what,,
+                    '             ' lcmds.$what,'#'
+   if zscrmaxd>30 then Call Pdaline ''
+   Call Pdaline pda@tw'   'lhdrt.$what
+   pdafixn=pdalines                              /* # fixed lines            */
+   if symbol('pdapos')<>'VAR' then pdapos=1
+   if pdapos<1 then pdapos=1
+   do n=pdapos to scrl.0 for pdamaxd             /* add scrollables          */
+     if left(scrl.n,1)=@tw then call Pdaline scrl.n
+     else call Pdaline @sf'  'scrl.n
+   end
+   pdamax =scrl.0                                /* data # of lines          */
+   /* display and check response */
+   zcmd=''
+   upper pselect
+   savesel=pselect
+   pdaselc=pselc.$what
+   pdavars=pvars.$what
+   pdahdr ='Willow Find-member (WFM) v'wfmver '-' phdrt.$what
+   /* 'next' can be set in a sub-menu */
+   if $nextcmd<>'' then do
+     zcmd=$nextcmd
+     $nextcmd=''
+     Address Ispexec "control nondispl enter"
+   end
+   if pdaplmsg='' & scrl.0>0 then do
+     m='line'
+     if scrl.0>0 then m=m's'
+     pdaplmsg=right('Line' 0+pdapos 'of' 0+scrl.0 m,pdascrw-2)
+   end
+   Address Ispexec "Display panel(WFMPDA#S)"
+   if rc>8 then return xmsg('Display rc' rc zerrlm)
+   if rc=8 then return 0
+   pselect=translate(strip(pselect))
+   if zcmd<>'' then do $zcmd=1 to 1
+     upper zcmd
+     parse var zcmd cverb cdata
+     /* system-wide commands */
+     l='DSN MBR VOL ADM KEY'
+     do n=1 to words(l)
+       if abbrev(word(l,n),cverb,1) then cverb=word(l,n)
+     end
+     zcmd=space(cverb cdata)
+     Select
+       when abbrev('FIND',cverb,1) then call SclFind cdata
+       when abbrev('WHERE',cverb,1) then call SclWhere cdata
+       when abbrev('ONLY' ,cverb,1) then call SclWhere cdata
+       when abbrev('RESET',zcmd,3) | zcmd='ALL' then call SclReset
+       when abbrev('STATE',zcmd,2) then call SclState
+       when abbrev('SORT',cverb,2) then do
+         if cdata='' then cc=QSort('base.')+SclReset()
+         else if sort.$what.cdata<>'' then Call FieldSort
+         else call ispmsg 'No sort def found'
+       end
+       when abbrev('VERSION',zcmd,3) then call ispmsg 'Build' wfmbuild
+       when wordpos(cverb,'DSN MBR VOL ADM KEY')>0 then do
+         parse var zcmd $what pselect
+         pdapos=1
+         savesel='?'                       /* force update   */
+         drop base. scrl.
+         parse value 0 0 with base.0 scrl.0
+       end
+       when cverb='EL' then call Accds 'Edit',$wfmlib,,cdata
+       when cverb='PDS' then,
+         call xtso "pdsmain '"$wfmlib"' ml :"
+       when cverb='DEBUG' then call DoDebug cdata
+       otherwise do                        /* function command */
+         Interpret "cc="$what"PCmdX()"
+         if cc=0 then leave $zcmd
+       end
+     end
+     iterate $mbrmain
+   end
+   if pselect<>savesel then iterate $mbrmain
+   if pdalcmdl<>'' then Interpret "Call" $what"LCmdX"      /* select fields  */
+ end
+ Return 0
+
+/*
+   Member list handlers
+*/
+MbrPCmdX: return ispmsg('Invalid command:' zcmd)        /* Primary commands  */
+
+MbrLCmdX:      /*  Line command handlers  */
+ do while pdalcmdl<>''
+   parse var pdalcmdl cpos','cval','pdalcmdl
+   Interpret "parse var base."whrp.cpos baserec.mbr
+   Select
+     when cval ='B'   then call Accds 'Browse',dsnname,dsnvol,mbrname
+     when cval ='E'   then call Accds 'Edit',dsnname,dsnvol,mbrname
+     when cval ='V'   then call Accds 'View',dsnname,dsnvol,mbrname
+     when cval ='I'   then Call MbrInfo
+     when cval ='P'   then Address TSO "PdsX '"dsnname"' vol("dsnvol") ml :"
+     when cval ='M'   then call MbrList dsnname,dsnvol
+     when cval ='DM'  then $nextcmd='D' dsnname
+     when cval ='DL'  then Call DsnList dsnname,dsnvol
+     when cval ='VM'  then $nextcmd='V' dsnvol
+     when cval='' then scrl.cpos=overlay(' ',scrl.cpos,2,3)  /* clear */
+     otherwise nop
+   end
+ end
+ return 0
+
+MbrInfo:
+ /*Interpret "parse var base."whrp.cpos baserec.mbr */
+ /* build panel */
+ parse var mbrmoddt mbrmoddt =9 mbrmodtm
+ "newstack"
+ queue @tw 'Member info'
+ queue @tg ' Name     '@tt||mbrname
+ queue @tg ' User     '@tt||mbruser
+ queue @tg ' Create   '@tt||nicedate(mbrcredt)
+ queue @tg ' Update   '@tt||nicedate(mbrmoddt) mbrmodtm
+ queue @tg ' Attribs  '@tt||mbrattr
+ queue @tg ' Size     '@tt||mbrsize
+ queue @tg ' Init     '@tt||mbrinit
+ queue @tg ' Aliasof  '@tt||mbralof
+ queue @tg ' SSI      '@tt||mbrssi
+ queue @tg ' Dsn-key  '@tt||mbrdkey
+ queue @tg ' '
+ queue @tw 'Dataset info '
+ queue @tg ' Name     '@tt||dsnname
+ queue @tg ' Volume   '@tt||dsnvol
+ queue @tg ' Type     '@tt||dsntype
+ queue @tg ' Cataloged'@tt||dsncat
+ queue @tg ' Dsorg    '@tt||dsndsorg
+ queue @tg ' Recfm    '@tt||dsnrecfm
+ queue @tg ' Lrecl    '@tt||dsnlrecl
+ queue @tg ' Blksz    '@tt||dsnblksz
+ queue @tg ' Mbrn     '@tt||dsnmbrn
+ if queued()>pdadpth then s='Y'
+ else s='N'
+ Call ListStack 'Findmember dialog - Member info' mbrname,s
+ return 0
+
+MbrData:    /* Build memberlist - See member WFMRXSET for db record layouts */
+ trace off
+ arg fmmbr ., $lstt .
+ $lstt=word($lstt 'MBR',1)
+ if $lstt='KEY' then ,
+   p='text('fmmbr') pos('$mdbdkeypos') endpos('$mdbdkeypen')'
+ else do
+   if pos('*',fmmbr)>0 & length(fmmbr)<4 then,
+       return ispmsg('*member must be at least 3 wide plus *')
+   p=verify(fmmbr,'%*','m')
+   if p=0 then p='key('left(fmmbr,8,'\')')'
+   else if p=1 then p='mask('fmmbr') pos(1) endpos(8)'
+   else do
+     parse var fmmbr key =(p) mask
+     if key<>'' & mask='*' then p='key('key')'
+     else if key<>'' then p='key('key')',
+        'mask('mask') pos('p') endpos(8)'
+     else p='mask('mask') pos('p') endpos(8)'
+   end
+   p=p 'strip(\)'
+ end
+ mbrl.0=0 /* just in case */
+ cc=RxVsamBa('get dd('$wfmdd') stem(mbrl.)' p)
+ if cc>0 | mbrl.0=0 then do
+   if mbrl.0=0 then call ispmsg 'Member(s) not found'
+   drop mbrl. dsnl.
+   return 0
+ end
+
+ /* get dataset info */
+ drop did. dsl.
+ parse value '' with did. dsl.
+ dsl.0=0
+ did.0=0
+ n=0
+ do mbrli=1 to mbrl.0
+   dk=$ddbkeypfx||substr(mbrl.mbrli,9,12)
+   if dsninfo.dk='' then parse value n+1 dk with n did.n
+ end
+ /* new datasetlist is used for just one pass through the dsndb */
+ if n>0 then do
+   did.0=n
+   cc=RxVsamBa('get dd('$wfmdd') keystem(did.) stem(dsl.)')
+   if datatype(dsl.0)<>'NUM' then dsl.0=0
+   Interpret,
+   "do i=1 to dsl.0;",
+     "Parse var dsl.i" $dbdparse";",
+     "if dsnrecfm='U' then dsntype='L';else dsntype='S';",
+     "dsninfo.dsnkey=DsnRecMake();",
+   "end"
+ end
+ drop did. dsl.
+
+ zsel=''
+ drop mbr                                        /* ensure text              */
+ Interpret,
+ "trace off;do m#=1 to mbrl.0;",
+   "Parse var mbrl.m#" $dbmparse";",
+   "mbrname=strip(mbrname,'t','\');",
+   "Call DsnRecParse dsninfo.mbrdkey;",
+   "mbrcredt=CnvDate(mbrcredt);",
+   "if mbrmoddt<>'' then",
+     "mbrmoddt=CnvDate(mbrmoddt) right(substr(mbrmoddt,9),5,0);",
+   "else mbrmoddt=mbrcredt;",
+   "mbruser=translate(mbruser,' ',',');",
+   "mbrattr=translate(mbrattr,' ',',');",
+   "mbrusop=space(mbruser mbrattr);",
+   "mbrt=right(dsntype,2);",
+   "base.m#="baserec.$lstt";",
+   "trace off;",
+ "end"
+ base.0=mbrl.0
+ Return QSort('base.')+SclReset()
+
+/*
+   Member list-by-datasetkey handlers
+*/
+KeyData:    /* Build memberlist - See member WFMRXSET for db record layouts */
+ Call MbrData arg(1),'KEY'
+ if arg(1)<>'' then,
+   header2.key =@tg || 'Dsname' dsnname 'on' dsnvol 'type' dsntype ,
+   'cat-state' dsncat
+ return 0
+KeyLCmdX:      /*  Line command handlers  */
+  Return MbrLCmdX(arg(1)) /*  Line command handlers  */
+KeyPCmdX: return ispmsg('Invalid command:' zcmd)        /* Primary commands  */
+
+ /*
+    Dataset list handlers - See member WFMRXSET for db record layouts
+    ----+----1----+----2----+----3----+----4----+----5
+    025719333556 SYSAS1 SYSA.AXR.EXEC PO VB 255 27998 Y
+ */
+DsnData:
+trace off
+ arg ddsn .
+ if ddsn='' then return 0
+ dsnl.0=0
+ p='mask('ddsn') pos('$ddbdsnpos') dlm('$ddbdlm')'
+ if left(ddsn,4)='VOL=' then,
+   p='text('substr(ddsn,5)') pos('$ddbvolpos') endpos('$ddbvolpen')'
+ cc=RxVsamBa('get dd('$wfmdd') stem(dsnl.)' $ddbvsbkey p)
+ if cc<>0 then return ispmsg('Dsnlist rc' cc RXVBERRM)
+ if datatype(dsnl.0)<>'NUM' then dsnl.0=0
+ if dsnl.0=0 then return ispmsg('No datasets found')
+ drop dsn
+ Interpret,
+ "do #=1 to dsnl.0;",
+   "Parse var dsnl.#" $dbdparse";",
+   "if dsnrecfm='U' then dsntype='L';else dsntype='S';",
+   "ddif=$dbdcdif+(date('b')-date('c'));",                        /*2024-10-20*/
+   "parse var dsnkey kd +4 th +2 tm +2 ts +2 tz;",                /*2024-10-20*/
+   "kd=kd+ddif;",                                                 /*2024-10-20*/
+   "dsnadded=date('s',kd,'b') th':'tm':'ts'.'tz;",                /*2024-10-20*/
+   "base.#="baserec.dsn";",
+ "end"
+trace off
+ base.0=dsnl.0
+ tt=time('e')
+ call QSort 'BASE.'
+ zz= 'sort elaps' time('e')-tt 'for' base.0 'records'
+trace off
+ Return SclReset()
+
+DsnLCmdX:
+ do while pdalcmdl<>''
+   parse var pdalcmdl cpos','cval','pdalcmdl
+   drop dsn
+   interpret "Parse var base."whrp.cpos baserec.dsn
+   Select
+     when cval ='B' then call Accds 'Browse',dsnname,dsnvol
+     when cval ='D' then call DsnList dsnname,dsnvol
+     when cval ='E' then call Accds 'Edit',dsnname,dsnvol
+     when cval ='I' then call DsnInfo
+     when cval ='V' then call Accds 'View',dsnname,dsnvol
+     when cval ='P' then Address TSO "PdsX '"dsnname"' vol("dsnvol") ml :"
+     when cval ='M' then call MbrList dsnname,dsnvol
+     when cval ='VM' then $nextcmd='V' dsnvol
+  /* when cval ='DM' then call DsnDm dsnkey  */
+     when cval ='DM' then do
+       if DoPrompt(@tt'DMbrs'@ty || dsnname,,
+         @tt'may take a loooong time as the entire db must be scanned'),
+         then $nextcmd='K' dsnkey
+     end
+     when cval ='DL' then call DsnList dsnname,dsnvol
+     otherwise nop
+   end
+ end
+ return 0
+
+DsnInfo:
+ /* build panel */
+ "newstack"
+ queue @tw 'Dataset info '
+ queue @tg ' Name     '@tt||dsnname
+ queue @tg ' Volume   '@tt||dsnvol
+ queue @tg ' Type     '@tt||dsntype
+ queue @tg ' Cataloged'@tt||dsncat
+ queue @tg ' Dsorg    '@tt||dsndsorg
+ queue @tg ' Recfm    '@tt||dsnrecfm
+ queue @tg ' Lrecl    '@tt||dsnlrecl
+ queue @tg ' Blksz    '@tt||dsnblksz
+ queue @tg ' Mbrn     '@tt||dsnmbrn
+ queue @tg ' Key      '@tt||dsnkey
+ if queued()>pdadpth then s='Y'
+ else s='N'
+ Call ListStack 'Findmember dialog - Dataset info'
+ return 0
+
+DsnPCmdX: return ispmsg('Invalid command:' zcmd)        /* Primary commands  */
+DsnDm:    /* lists member in database for dataset */
+ $nextcmd='M' dsnkey
+ return 0
+ cc=RxVsamBa('get dd('$wfmdd') stem(mlst.)',
+    'text('dsnkey') pos('$mdbdkeypos') endpos('$mdbdkeypen')')
+ if cc<>0 then return ispmsg('DB member-by-dsname rc' cc RXVBERRM)
+ if dsnrecfm='U' then dsntype='L';else dsntype='S'
+ "delstack"
+ Interpret,
+ "do #=1 to mlst.0;",
+   "zz=mlst.#;",
+   "Parse var mlst.#" $dbmparse";",
+   "mbrname=strip(mbrname,'t','\');",
+   "if mbrmoddt<>'' then",
+     "mbrmoddt=CnvDate(mbrmoddt) right(substr(mbrmoddt,9),5,0);",
+   "else if mbrcredt<>'' then mbrcredt=CnvDate(mbrcredt);",
+   "mbruser=translate(mbruser,' ',',');",
+   "mbrattr=translate(mbrattr,' ',',');",
+   "mbrusop=space(mbruser mbrattr);",
+   "queue left(mbrname,8) left(mbrusop,24) left(mbrmoddt,15) ;",
+ "end"
+ call ListStack 'List recorded members for' dsnname '('dsntype')'
+ return 0
+
+ /* Volume display - See member WFMRXSET for db record layouts
+    ----+----1----+----2----+----3----+----4----+----5
+    025719333556 SYSAS1 SYSA.AXR.EXEC PO VB 255 27998 Y   */
+VolData:
+ arg pvol .
+ cc=RxVsamBa('get dd('$wfmdd') stem(dbvl.)' $ddbvsbkey,
+    'mask('pvol') pos('$ddbvolpos') endpos('$ddbvolpen')')
+ if cc<>0 then return ispmsg('vollist rc' cc RXVBERRM)
+ if datatype(dbvl.0)<>'NUM' then dbvl.0=0
+ if dbvl.0=0 then return ispmsg('No volumes found')
+ /* 1 - make dataset counts and descrete volser list */
+ vln=0
+ drop vref.
+ vref.=0
+ Interpret,
+ "do n=1 to dbvl.0;",
+   "Parse var dbvl.n" $dbdparse";",
+   "if vref.dsnvol=0 then do;",
+     "vln=vln+1;",
+     "vl.vln=dsnvol;",
+   "end;",
+   "vref.dsnvol=1+vref.dsnvol;",
+ "end"
+ vl.0=vln
+ Call QSort 'vl.'
+ /* 2 - make base-and screen lists */
+ drop vol
+ alldsn#=0
+ Interpret,
+ "do n=1 to vln;",
+   "volser=vl.n;",
+   "dsnn=vref.volser;",
+   "alldsn#=alldsn#+dsnn;",
+   "base.n="baserec.vol";",
+   "scrl.n="lcmdl.vol";",
+ "end"
+ base.0=vln
+ drop dbvl.
+ lhdrt.vol=subword(lhdrt.vol,1,2) || @tb || ' total='alldsn#
+ Return QSort('base.')+SclReset()
+
+VolPCmdX:  return ispmsg('Invalid command:' zcmd)       /* Primary commands  */
+
+VolLCmdX:
+ do while pdalcmdl<>''
+   parse var pdalcmdl cpos','cval','pdalcmdl
+   drop vol
+   interpret "Parse var base."whrp.cpos baserec.vol
+   Select
+     when cval ='D' then call DsnList ,volser
+     when cval ='DD' then $nextcmd='D VOL='volser
+     otherwise nop
+   end
+ end
+ return 0
+
+ /* Admin tasks
+    baserec.adm ="task'\'text'\'act" */
+AdmData:
+ cc=Listdsi("'"$wfmlib"'")
+ wfmlibvl=sysvolume
+ drop adm
+ "newstack"
+ queue      @tw'List or maint by records'
+ queue     'JDBLIST \List db entries\s'
+ queue     'JDBDDORP\' ||,
+           'Delete orphaned dataset- and associated member records\S'
+ queue     'JDBDDUP \' ||,
+           'Delete duplicate dataset- and associated mbr records\s'
+ queue     'JDBMDORP\Delete orphaned member records\s'
+ queue     'JDBUPD  \Add or delete records by various criteria\s'
+ queue     'JSYNCVOl\Synchronize volsers\s'
+ queue     'JXREFDV \Cross-ref database and VTOC\s'
+ queue      @tw
+ queue      @tw'Parmlib and settings'
+ queue     'WFMSET  \Edit settings\e' $wfmsetlb'(WFMSET)'
+ queue     'Setlib  \Edit settings lib\e' $wfmsetlb
+ queue     'WFMJOBPM\Edit job parameters\e' $wfmsetlb'(WFM$JBPM)'
+ queue      @tw
+ queue      @tw'Create or copy database'
+ queue     'JDBCR   \DB create database\ps'
+ queue     'JDBUNLD \DB unload sample\s'
+ queue     'JDBRELD \DB reload sample\s'
+ queue     'JDBCV0D \DB convert two v010 databases into one v012\ps'
+ queue     'JDBCV1D \DB convert consolidated v011 database to v012\ps'
+ /*eue     'JDBCV2D \DB convert two v011 databases into one v012\ps'*/
+ queue      @tw
+ queue      @tw'Installation tasks'
+ queue     'WFMDOC\View doc memnber\v WFMDOC'
+ queue     'WFMLIB\Edit WFM library\e' $WFMLIB
+ queue     'JMKSETLB\Create settings lib\s'
+ queue     'JMKLOAD \Load programs to local pgmlib\ps'
+ queue     'JMKPRDL \Create or update local lib\ps'
+ base.0  = queued()
+ drop whrp.
+ do n=1 to base.0
+   parse pull base.n
+ end
+ "delstack"
+ interpret,
+ "do n=1 to base.0;",
+   "if left(base.n,1)=@tw then scrl.n=base.n;",
+   "else do;",
+     "parse var base.n" baserec.adm";",
+     "task=strip(task);",
+     "scrl.n="lcmdl.adm";",
+     "whrp.n=n;",
+   "end;",
+ "end"
+ scrl.0  = base.0
+ return 0
+
+AdmPCmdX:  return ispmsg('Invalid command:' zcmd)       /* Primary commands  */
+
+AdmLCmdX:      /*  Line command handlers  */
+ drop adm
+ wfmlib=$wfmlib
+ ddsn=$WFMDB
+ mdsn=$WFMDB
+ do while pdalcmdl<>''
+   parse var pdalcmdl cpos','cval','pdalcmdl
+   Interpret "parse var base."whrp.cpos baserec.adm
+   parse upper value task act with task act p
+   Select
+     when cval ='E' & act='PS' then call Accds 'Edit',$wfmlib,,task'*'
+     when cval ='E' then call Accds 'Edit',$wfmlib,,task
+     when act  ='E' & p<>'' then call Accds 'Edit',p
+     when act  ='E' then call Accds 'Edit',$wfmlib,,task
+     when act  ='V' then call Accds 'View',$wfmlib,,task
+     when act  ='S' then call SkelEdit task
+     when act  ='PS' then do
+     /*Interpret WfmGset() */
+       if Ispx('display panel('task'#')=0 then call SkelEdit task'$'
+     end
+     otherwise nop
+   end
+ end
+ return 0
+
+SclState:
+ if $wfmdb='' then return xmsg('Db not defined')
+ parse value '?' with dbcredt l.1
+ if VsamAcc('get key(<created) stem(l.)')<>0 then say vsem
+ else if left(l.1,8)='<created' then parse var l.1 . . . dbcredt '>' .
+ drop data.
+ data.=''
+ "newstack"
+ parse value '' with dsntrkn dsntrku mbrtrkn mbrtrku,
+   dsnrectrk mbrrectrk
+ Parse value WfmVsInf($wfmdb,,
+       'data.volser","data.rec_total","data.tracks","data.usepct","',
+    || 'data.extents'),
+        with dsnvol','dsnrecn','dsntrkn','dsnused','dsnextnt
+ if dsnvol='' then return xmsg('Database not located')
+ if dsntrkn<>'' then dsntrku=dsntrkn*dsnused/100
+ if dsnrecn<>'' then dsnrectrk=dsnrecn%dsntrku
+ queue @tw'General'
+ queue @tg' Version     '@tt wfmbuild
+ queue @tg' Product lib '@tt $wfmlib
+ queue @tg' Settings lib'@tt $wfmsetl
+ queue ' '
+ queue @tw'Database info'
+ queue @tg' Name        '@tt $wfmdb
+ queue @tg' Volser      '@tt dsnvol
+ queue @tg' Created     '@tt dbcredt
+ queue @tg' Records     '@tt dsnrecn
+ queue @tg' Tracks alc  '@tt left(dsntrkn,6) '(='dsntrkn%15 'cyls)'
+ queue @tg' Tracks use  '@tt left(dsntrku,6) '(='dsntrku%15 'cyls)'
+ queue @tg' Usage pct   '@tt strip(dsnused)
+ queue @tg' Extents     '@tt dsnextnt
+ queue @tg' Recs per trk'@tt dsnrectrk
+ queue ' '
+ if queued()>pdadpth then s='Y'
+ else s='N'
+ drop dsnrecn dsntrkn dsntrku dsnused mbrrecn mbrtrkn mbrused mbrtrku
+ Return ListStack('WFM State',s)
+
+FieldSort:
+ parse var sort.$what.cdata sn sl .
+ interpret,
+ "do n=1 to base.0;",
+   "parse var base.n" baserec.$what";",
+   "fs.n=left("sn","sl") base.n;",
+ "end"
+ fs.0=base.0
+ Call QSort 'FS.'
+ sp=sl+2
+ do n=1 to base.0
+   base.n=substr(fs.n,sp)
+ end
+ drop fs.
+ Call SclReset
+ return 0
+ /*
+                      Various subroutines
+ */
+
+XTSO: zz=outtrap(word(arg(2) '$.',1))
+        address tso arg(1);zz=outtrap('off');return rc
+
+XMsg: say arg(1);return 0
+
+ISPMSG:
+ parse arg zedlmsg
+ address ispexec "setmsg msg(isrz000)"
+ return 0
+
+ISPX:
+ zerrlm=''
+ address ispexec arg(1)
+ ispxrc=rc
+ ispxmsg=arg(1) 'rc' rc zerrlm
+ if arg(2)='' then return ispxrc
+ if rc<=arg(2) then return ispxrc
+ zedlmsg=ispxmsg
+ address ispexec "setmsg msg(isrz000)"
+ return ispxrc
+
+AccDs: procedure /* what,dsn,vol,mbr */
+ arg what .,dsn .,vol .,mbr .
+ if mbr<>'' then dsn=dsn'('mbr')'         /* member */
+ if vol<>'' then vol='volume('vol')'
+ return Ispx(what "dataset('"dsn"')" vol,4)
+
+SkelEdit:
+ arg skel .
+ call IspX 'ftclose'
+ cc=bpxwdyn('alloc dd(ispfile) new delete reuse',
+    'lrecl(255) recfm(v,b) blksize(0) tracks space(8,8) unit(sysda)')
+ if cc<>0 then return ispmsg("alloc ispfile failed" cc)
+ if IspX("ftopen",0)=0 then do
+   cc=IspX("ftincl" skel,0)
+   zz=IspX("ftclose")
+   if cc=0 then do
+     if IspX("lminit dataid($did) ddname(ispfile)",0)=0 then,
+       call ispx "edit dataid("$did") macro(WFMEM001) confirm(NO)",4
+     Call IspX "lmfree dataid("$did")"
+   end
+ end
+ return bpxwdyn('free dd(ispfile)')
+
+DsnList: Procedure
+ arg lvl .,vol .
+ if lvl vol='' then return xmsg('dsnlist no parms')
+ if lvl<>'' then lvl='LEVEL('lvl')'
+ if vol<>'' then vol='VOLUME('vol')'
+ if Ispx("lmdinit listid(li)" lvl vol,0)=0 then do
+   call IspX "lmddisp listid("li")",0
+   call ispx "lmdfree listid("li")"
+ end
+ return 0
+
+Requote: if arg(1)='' then return '';else return "'"Unquote(arg(1))"'"
+Unquote: return strip(space(translate(arg(1)," ","'")))
+RequoteL: Procedure /* requote list */
+ trace off
+ p=translate(arg(1)," ","'")
+ r=''
+ do n=1 to words(p)
+   parse value word(p,n) with q1'.'.
+   if left(q1,3)='SYS' & length(q1)=8 then iterate /* drop sysnames */
+   r=r "'"word(p,n)"'"
+ end
+ return strip(r)
+
+LastWord: return word(arg(1),words(arg(1)))
+
+MbrList:
+ trace off
+ arg dsn .,vol .
+ if vol<>'' then vol='VOLUME('vol')'
+ if Ispx("lminit dataid(mldid) dataset('"dsn"')" vol,0)=0 then do
+   Call Ispx "memlist dataid("mldid") field(9)",0
+   call Ispx "lmfree dataid("mldid")" /* just in case */
+ end
+ return 0
+
+DsnRecParse:
+ trace off
+ parse arg dsnname','dsnvol','dsntype','dsndsorg','dsnrecfm','dsnlrecl',',
+           dsnblksz','dsncat','dsnmbrn .
+ return 0
+DsnRecMake:
+ return    dsnname','dsnvol','dsntype','dsndsorg','dsnrecfm','dsnlrecl',' ,
+        || dsnblksz','dsncat','dsnmbrn
+
+NiceDate:
+ if arg(1)='' then return ''
+ return Insert('-',Insert('-',arg(1),6),4)
+
+CnvDate:
+ trace off
+ arg cddv +8 cdtv
+ if  cddv='' then return ''
+ parse var cddv y'/'m'/'d
+ if y<50 then cddv='20'y''m''d
+ else         cddv='19'y''m''d
+ return cddv
+
+ListVars:
+ arg lvl
+ do lvln=1 to words(lvl)
+   lvw=word(lvl,lvln)
+   say ' 'left(Upcase1(lvw),12) value(lvw)
+ end
+ return 0
+
+ListStem:
+ parse arg lsn .,lsh
+ lsn=translate(strip(lsn,'t','.'))'.'  /* ensure trailing dot */
+ if lsh<>'' then say lsh
+ lsnc=Value(lsn'0')                    /* get count */
+ lsf=copies(' ',$llvl+1)
+ do lsnn=1 to lsnc
+   say lsf||value(lsn||lsnn)
+ end
+ return 0
+
+ListStack: Procedure expose pdaattr
+ Interpret pdaattr
+ scrw=80
+ pdapos =1
+ scrl.0=queued()
+ base.0=queued()
+ rml=0
+ do n=1 to scrl.0
+   parse pull base.n
+   scrl.n=base.n
+   rml=max(rml,length(scrl.n))
+ end
+ "delstack"
+ address ispexec "vget zscrmaxw"
+ if rml>80 & zscrmaxw>= 120 then scrw=120
+ pdamax=scrl.0
+ pdapos=1
+ parse arg pdahdr,scrl
+ upper scrl
+ do until rc>0
+   parse value '' with zcmd pdaarea
+   call PdaReinit
+   Call Pdaline ''
+   pdafixn=1
+   if scrl='N' | pdapos<1 then pdapos =1
+   do n=pdapos to scrl.0 for pdamaxd
+     Call Pdaline ' 'scrl.n
+   end
+   pdascrw=scrw
+   zcmd=''
+   Address Ispexec "Display panel(WFMPDA#S)"
+   parse upper value space(zcmd) with cverb cdata
+   Select
+     when abbrev('FIND',cverb,1) then do
+       if scrl<>'N' then  call SclFind cdata
+       else call ispmsg 'FIND is not available for this screen'
+     end
+     when abbrev('WHERE',cverb,1),
+        | abbrev('ONLY',cverb,1) then call SclWhere cdata
+     when abbrev('RESET',zcmd,3) then do  /* should have been SCLRESET */
+       do #=0 to base.0
+         scrl.#=base.#
+       end
+       pdapos=1
+     end
+     otherwise pdalmsg='*Invalid command'
+   end
+ end
+ if rc>8 then say 'Display rc' rc zerrlm
+ return 0
+
+QSort: Interpret sortpgm ; return rc
+
+ /* get panel attr chars */
+PdaInit:
+ pdascrw=80
+ zerrlm=''
+ Address Ispexec "Control nondispl enter"         /* drive panel              */
+ Address Ispexec "Display panel(WFMPDA#S)"        /* to get some              */
+ if rc<>0 then do
+   cc=rc
+   if cc=12 then Address Ispexec "Control nondispl end" /* prevent loop       */
+   return xmsg('Display WFMPDA#S rc' cc zerrlm)+8
+ end
+ Address Ispexec "vget zscrmaxd"                  /* screen values            */
+ pdamaxd=zscrmaxd
+ Interpret pdaattr
+ parse value 1 0 with pdapos pdamax pdaselc
+ parse value 'turq uscore' with @ui1c @ui1h
+ Return PdaReInit()
+
+PdaReInit:
+ trace off
+ pdascrw=80
+ Address Ispexec "vget zscrmaxw"
+ if zscrmaxw>=120 then pdascrw=120
+ parse value 0 0 with pdafixn pdalines pdaarea pdaashad
+ Return 0
+
+Pdaline: /* add line to screen image */
+ trace off
+ pdaarea =pdaarea || strip(arg(1),'t') || pda@nl  /* add using new-line       */
+ pdalines=pdalines+1
+ /*if arg()=1 then return 0 */
+ s=arg(2)                                         /* shadow var               */
+ if arg()=3 then s=translate(s,@sv,arg(3))        /* shadow var pseudo char   */
+ pdaashad=pdaashad || strip(s,'t') || @nl         /* add to shadow with newln */
+ return 0
+
+SclFind:
+ if cdata='' & symbol('findsave')='VAR' then cdata=findsave
+ copt=''
+ if cdata='' then return ispmsg('Missing argument')
+ n=words(cdata)
+ if pos("'",cdata)>0 then do
+   parse var cdata cf "'" cdata "'" cb
+   copt=space(cf cb)
+ end
+ else if wordpos(translate(word(cdata,1)),'FIRST LAST PREV NEXT')>0 then,
+   parse var cdata copt cdata
+ else if wordpos(translate(word(cdata,n)),'FIRST LAST PREV NEXT')>0 then,
+   parse value word(cdata,n) delword(cdata,n) with copt cdata
+ if wordpos(copt,'FIRST LAST PREV NEXT')>0 then do
+   dir=copt
+   cdata=strip(delword(cdata,n))
+ end
+ else dir='NEXT'
+ findsave=cdata
+ select
+   when dir='FIRST' then parse value 1 scrl.0 1 with ff ft fb
+   when dir='LAST'  then parse value scrl.0 1 '-1' with ff ft fb
+   when dir='PREV'  then parse value pdapos-1 1 '-1' with ff ft fb
+   otherwise             parse value pdapos+1 scrl.0 1 with ff ft fb /* next */
+ end
+ do p=ff to ft by fb until pos(cdata,translate(scrl.p))>0; end
+ if p>scrl.0 | p=0 then return ispmsg(cdata 'not found')
+ pdapos=p
+ return 0
+
+SclWhere: /* show only where text match */
+ /*Call Reset*/
+ arg wp
+ ?m=(verify(wp,'*%','m')>0)                      /* 1(true) parm is a mask   */
+ o=0
+ do n=1 to scrl.0
+   if ?m then do
+     if Pattern(wp,translate(scrl.n))=0 then iterate
+   end
+   else if pos(wp,translate(scrl.n))=0 then iterate
+   o=o+1
+   scrl.o=scrl.n
+   whrp.o=whrp.n
+ end
+ scrl.0=o
+ pdapos=1
+ return 0 /*ispmsg('') */  /* clear 'reset done' */
+
+SclReset: /* show all */
+ drop whrp.
+ Interpret,
+ "do n=1 to base.0;",
+   "parse var base.n" baserec.$what";",
+   "scrl.n="lcmdl.$what";",
+   "whrp.n=n;",
+ "end"
+ scrl.0=base.0
+ pdapos=1
+ return 0 /*ispmsg('') */  /* clear 'reset done' */
+
+SetPfk:  Procedure    /* Redefine PFkey(s) (future) */
+ return 0
+ address ispexec
+ do n=1 to 24
+   v=right(n,2,0)
+   "vget ZPF"v
+   t = translate(value('ZPF'v))
+   if t='HELP' then do
+     orghelpkey=n
+     zz=Value('ZPF'v,'SclHelp')
+     "vput ZPF"v
+   end
+ end
+ return 0
+
+ReSetPfk:  Procedure  /* Reestabkish PFkey(s) (future) */
+ return 0
+ address ispexec
+ do n=1 to 24
+   v=right(n,2,0)
+   "vget ZPF"v
+   t = translate(value('ZPF'v))
+   if t='SCLHELP' then do
+     zz=Value('ZPF'v,'HELP')
+     "vput ZPF"v
+   end
+ end
+ return 0
+
+ /* if DoPrompt('Confirm cancel task' taskname) then ... */
+DoPrompt: Procedure expose pdaattr
+ Interpret pdaattr
+ Call PdaReinit
+ pdascrw=80
+ pdahdr='Findmbr - prompt'
+ call pdaline @tg' '
+ do n=1 to arg()
+   call pdaline @tg || arg(n)
+ end
+ call pdaline @tg' '
+ call pdaline @tg' Press ENTER to confirm, or hit END/RETURN to abort'
+ pdafixn=pdalines
+ zcmd=''
+ Address Ispexec "Display panel(WFMPDA#S)"
+ return (rc=0)
+ return pdaresp='ENTER'
+
+VsamAcc: /* parms  1: command  */
+ parse arg p
+ if pos('DD(',translate(p))=0 then p=p 'DD('$wfmdd')'
+ parse value '' with rxvberrm vsem               /* just in case             */
+ vscc=0+RxVsamBa(p)
+ if vscc<8 then return vscc
+ if rxvberrm<>'' then rxvberrm='msg' rxvberrm
+ vsem='VsamAcc' p 'rc' space(vscc rxvberrm)
+ call xmsg vsem
+ return vscc
+
+DoDebug:
+ parse arg ddv ddp
+ select
+   when ddv='LISTVAR' | ddv='LV' then say 'Var' ddp'='value(ddp)
+   otherwise say 'Invalid debug request'
+ end
+ return 0
+
+/*
+ PATTERN function - Performs ISPF-like pattern matching on a pair of
+ strings: 1st string is the mask, 2nd is the data.
+ Parameters   mask,stringÝ,maskchrs¨
+ Returns   0  (false)  not matched or missing parm
+           1  (true )  match
+*/
+Pattern: Procedure
+ trace off
+ if arg()<2 then exit 0
+ parse arg msk,str,mchr
+ parse value word(mchr '*%',1) with mchr 1 mcm +1 mco  /* split mask chrs    */
+ parse value 1 1 length(msk) length(str) with mp sp ml sl .
+ do while mp<=ml & sp<=sl
+   select
+     when substr(msk,mp,1)=mco then,                   /* mask starts with % */
+       parse value mp+1 sp+1 with mp sp                /* bump ptrs          */
+     when substr(msk,mp)=mcm then return 1             /* match on rest      */
+     when substr(msk,mp,2)=mchr then do                /* both mask chrs     */
+       mp=mp+1
+       msp=verify(msk,mco,'n',mp+1)                    /* mak sub-str pos    */
+       if msp=0 then return (ml-mp)=(sl-sp)            /* rest mask is %s    */
+       p=verify(msk,mchr,'m',msp)
+       if p>0 then msl=p-msp
+       else msl=ml+1-msp
+       ms=substr(msk,msp,msl)                          /* mask substring     */
+       mpl=msp-mp                                      /* mask chrs len      */
+       p=pos(ms,str,sp+mpl)
+       if p=0 then return 0
+       sp=p-mpl
+     end
+     when substr(msk,mp,2)=mcm||mcm then mp=mp+1       /* double '*'         */
+     when substr(msk,mp,1)=mcm then do                 /* '*'                */
+       mp=mp+1                                         /* bump mask          */
+       p=verify(msk,mchr,'m',mp)                       /* -> end mask chr    */
+       if p=0 then return substr(msk,mp)=right(str,ml-mp+1) /* no more maskc */
+       ms=substr(msk,mp,p-mp)                          /* mask substr        */
+       msl=length(ms)
+       mp=p
+       p=pos(ms,str,sp)                                /* locate in string   */
+       if p=0 then return 0                            /* not found          */
+       sp=p+msl
+     end
+     when substr(str,sp,1)<>substr(msk,mp,1) then return 0 /* not matched    */
+     otherwise do
+       p=verify(msk,mchr,'m',mp)                       /* locate msk chr     */
+       if p=0 then return substr(msk,mp)=substr(str,sp)/* no more mask chrs  */
+       l=p-mp
+       if substr(msk,mp,l)<>substr(str,sp,l) then return 0
+       mp=mp+l
+       sp=sp+l
+     end
+   end
+ end
+ return (mp>ml & sp>sl ) | (mp=ml & substr(msk,mp)='*') /* both exhausted ?   */
+
+/* setup various definitons */
+SetDefs:
+ drop mbr dsn vol adm date mbrname dsname name zz /* ensure text           */
+ parse value '' with header2.
+ /* for member display */
+ baserec.mbr ="mbrname','dsnname','dsnvol','"||,  /* sort major fields     */
+              "mbrcredt','mbrmoddt','mbrsize','mbrinit','"||,
+              "mbruser','mbrattr','mbrusop','mbralof','mbrdkey','"||,
+              "mbrssi','dsntype','dsndsorg','"||,
+              "dsnrecfm','dsnlrecl','dsnblksz','dsncat','dsnmbrn"
+ sort.mbr.zz     ='mbrname 8'
+ sort.mbr.mbrname='mbrname 8'
+ sort.mbr.name   ='mbrname 8'
+ sort.mbr.dsname ='dsnname 44'
+ sort.mbr.dsn    ='dsnname 44'
+ sort.mbr.date   ='mbrmoddt 14'
+ phdrt.mbr   ='List members'
+ pvars.mbr   ='pselect'
+ pselc.mbr   ='B E V I P M DL DM VM'
+ input.mbr   =@tg || 'Member' || @ui1 || left(' ',8) || @tb
+ pcmdt.mbr   ='Dsn d  Vol v  Find t  Where t  SOrt f  STate'
+ pcmds.mbr   ='#      #      #       #        ##      ##'
+ lcmdt.mbr   ='Browse Edit Info View Mbrlist DList Pdsmain'
+ lcmds.mbr   ='#      #    #    #    #       ##    #      '
+ if zscrmaxw>=100 then do
+   lhdrt.mbr ='Mbrname ' left('Dsname' ,44) 'Volser',
+             || ' 'left('User/options',24)' Date     Time  Size  Type Cat'
+   lcmdl.mbr ='@tg || left(mbrname,8) || @tt || left(dsnname,44)',
+              'left(dsnvol,6) left(mbrusop,24)',
+              'left(mbrmoddt,14) right(mbrsize,5) center(dsntype,4)',
+              'center(dsncat,3)'
+ end
+ else do
+   lhdrt.mbr ='Mbrname ' left('Dsname',44) 'Volser Date       T C'
+   lcmdl.mbr ='@tg || left(mbrname,8) || @tt || left(dsnname,44)',
+   'left(dsnvol,6) nicedate(left(mbrmoddt,8)) left(strip(dsntype),1) dsncat'
+ end
+ /* for member-by-datasetkey display */
+ baserec.key ="mbrname','dsnname','dsnvol','"||,  /* sort major fields     */
+              "mbrcredt','mbrmoddt','mbrsize','mbrinit','"||,
+              "mbruser','mbrattr','mbrusop','mbralof','mbrdkey','"||,
+              "mbrssi','dsntype','dsndsorg','"||,
+              "dsnrecfm','dsnlrecl','dsnblksz','dsncat','dsnmbrn"
+ sort.mbr.zz     ='mbrname 8'
+ sort.key.mbrname='mbrname 8'
+ sort.key.name   ='mbrname 8'
+ sort.key.dsname ='dsnname 44'
+ sort.key.dsn    ='dsnname 44'
+ sort.key.date   ='mbrmoddt 14'
+ phdrt.key   ='List members by dataset key'
+ pvars.key   ='pselect'
+ pselc.key   ='B E V I P M DM VM'
+ input.key   =@tg || 'Dsn-key' || @ui1 || left(' ',12) || @tb
+ pcmdt.key   ='Dsn d  Vol v  Find t  Where t  SOrt f  STate'
+ pcmds.key   ='#      #      #       #        ##      ##'
+ lcmdt.key   ='Browse Edit Info View Mbrlist Pdsmain'
+ lcmds.key   ='#      #    #    #    #       #      '
+ lhdrt.key ='Mbrname  ' left('User/options',24)' Date     Time  Size'
+ lcmdl.key ='@tg || left(mbrname,8) || @tt left(mbrusop,24)',
+            'left(mbrmoddt,14) right(mbrsize,5)'
+ /* for dataset display */
+ drop dsn dsname name volser vol zz /* ensure text              */
+ baserec.dsn ="dsnname','dsnvol','dsntype','dsndsorg','"||,
+              "dsnrecfm','dsnlrecl','dsnblksz','dsncat','dsnmbrn','"||,
+              "dsnkey','dsnadded"                                 /*2024-10-24*/
+ sort.dsn.zz     ='dsnname 44'
+ sort.dsn.dsname ='dsnname 44'
+ sort.dsn.name   ='dsnname 44'
+ sort.dsn.volser ='dsnvol 6'
+ sort.dsn.vol    ='dsnvol 6'
+ phdrt.dsn   ='List datasets'
+ pvars.dsn   ='pselect'
+ pselc.dsn   ='B D E I V M VM DM DL' /* MM' */
+ input.dsn   =@tg || 'Dsname' || @ui1 || left(' ',44) || @tb
+ pcmdt.dsn   ='Mbr m  Vol v  Find t  Where t  SOrt f  STate'
+ pcmds.dsn   ='#      #       #      #        ##      ##'
+ lcmdt.dsn   ='Browse Dsnlist Edit Info View Mbrlist DList Pdsmain DMbrs'
+ lcmds.dsn   ='#      #       #    #    #    #       ##    #       ##'
+ if zscrmaxw>=100 then do
+   lhdrt.dsn =left('Dsname',44) 'Volser Ty Do Rf Lrecl Blksz Membn Cat',
+              'Added'
+   lcmdl.dsn ='@tg || left(dsnname,44) || @tt || dsnvol',
+             'left(dsntype,2) left(dsndsorg,2) left(dsnrecfm,2)',
+             'right(dsnlrecl,5) right(dsnblksz,5)',
+             'right(dsnmbrn,5) center(dsncat,3) dsnadded'
+ end
+ else do
+   lhdrt.dsn =left('Name',44) 'Volser Ty Do Rf Lrecl Blksz Cat'
+   lcmdl.dsn ='@tg || left(dsnname,44) || @tt || dsnvol',
+             'left(dsntype,2) left(dsndsorg,2) left(dsnrecfm,2)',
+             'right(dsnlrecl,5) right(dsnblksz,5) left(dsncat,3)'
+ end
+
+ /* for volume display */
+ phdrt.vol   ='List volsers'
+ baserec.vol ='volser dsnn'
+ pvars.vol   ='pselect'
+ pselc.vol   ='D DD'
+ input.vol   =@tg || 'Volser' || @ui1 || left(' ',6) || @tb
+ pcmdt.vol   ='Mbr m  Dsn d  Find t  Where t  STate  DDsn'
+ pcmds.vol   ='#      #      #       #        ##     ##'
+ lcmdt.vol   ='Datasets'
+ lcmds.vol   ='#       '
+ lhdrt.vol   ='Volser  Datasets'
+ lcmdl.vol   ='@tg || volser || @tt dsnn'
+
+ /* for admin tasks    */
+ phdrt.adm   ='Administrator tasks'
+ baserec.adm ="task'\'text'\'act"
+ pvars.adm   =''
+ pselc.adm   ='=S E'
+ input.adm   =''
+ pcmdt.adm   ='Dsn d  Mbr m  VOL v  Find t  Where t  STate'
+ pcmds.adm   ='#      #      ###    #       #        ##'
+ lcmdt.adm   ='Select (default)  Edit'
+ lcmds.adm   ='#                 #'
+ lhdrt.adm   ='Taskid    Text'
+ lhdrt.adm   =''
+ lcmdl.adm   ='@tg || left(task,8) || @tt text'
+ return 0

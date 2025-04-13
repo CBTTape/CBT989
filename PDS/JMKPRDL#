@@ -1,0 +1,27 @@
+)ATTR
+ +  type(text) color(green)
+ %  type(text) color(white)
+ "  type(text  ) color(blue  )
+ #  type(input ) color(turq  ) hilite(uscore) caps(on)
+ !  type(output) color(turq  )
+ @  type(output) color(yellow)
+)BODY EXPAND(\\)
+%\ \Make production lib\ \+
+%Cmd =>_zcmd \ \+    +
++
++
+%Product library
++ Dsname    #prdlib                                     +
++ Volser    #prdvol+ If create and non-SMS
++
++ Delete old#z+ Y to delete a previous lib
++
+"Remember to copy / update the settings lib and procedures
+"that you may have added to system libraries.
+)INIT
+ .zvars = '(prddel)'
+ if (&prdvol EQ &Z) &prdvol = &$wfmdsv
+)PROC
+ Ver (&prdlib,nb,dsname)
+ Ver (&prddel,list,Y)
+)END

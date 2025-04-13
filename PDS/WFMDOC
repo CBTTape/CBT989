@@ -1,0 +1,228 @@
+Find Member Name(s) dialog
+
+Product id: WFM
+
+Build 012
+
+
+ By Willy Jensen
+  email  willy@harders-jensen.com
+  web    http://harders-jensen.com/wjtech/index.html
+
+
+ You really should read this document all the way through.
+
+
+In this build
+
+ -  A single database only.
+ -  Allow more members in a separate library, see 'The SETLIB feature'
+    below for details.
+ -  Library xx.PARM has been changed to xx.SETLIB.
+ -  Libref WFMPARM has been changed to WFMSETLB.
+ -  New external program REXXVARS.
+
+ For the change history, see member WFMHIST.
+
+ -  Build 012.1 requires external program RXVSAMBA v031.2.
+ -  Build 012.11 requires external program REXXVARS v011.22.
+
+
+Introduction
+
+ The WFM application is an ISPF application which allows you to find
+ PDS/PDSE member(s) which existed at the latest WFM update run.
+
+ The basis for member info load is disk, so uncataloged datasets are
+ processed too. This means that the real name of a dataset is stored,
+ not any symbolic datasetname.
+
+ Member(s) can be located by full name or a mask.
+
+ The generated member list allows browse, edit and view of the member
+ and the dataset where the member is found
+
+ WFM is build using REXX + a couple of freeware programs, so is not as
+ resource lean as a purpose built application probably would be. On
+ the other hand, a lot of thoughts have gone into making it perform
+ reasonably well.
+
+ For first-time installation, see the following section 'Getting
+ started'.
+
+ For migration from an earlier release, see section 'Migration from
+ earlier release' later, which also describes how to convert to a
+ single database.
+
+
+Getting started.
+
+ You must use this procedure whether you are installing for the very
+ first time, or upgrading from a previous build. This is because both
+ the dataset- and database structures have changed in build 012.
+
+ -  Edit the WFMSET member in the installation library. Do not worry
+    if the WFMSETLB and WFMDB values refer to non-existing datasets,
+    they will be created later.
+ -  Edit the WFMSTEPL member in the installation library, you can make
+    is a comment if all the programs are in the link- or lpalist.
+ -  Execute the dialog member WFMDIALG, i.e. using ISPF 3.4, ignore
+    any messages about non-existing datasets.
+ -  Enter command ADM to start the administration sub-memu.
+ -  From the 'Create or copy databases' section, select 'JDBCR DB
+    create database', updates values in the panel and run the
+    generated job.
+ -  From the 'Installation tasks' section, select the tasks JMKSETLB,
+    JMKLOADL and JMKPRDL, verify and run the jobs. JMKLOADL will
+    install the freeware programs PDSMAIN (PDS86), REXXVARS, RXSAFCHK,
+    RXUCBSCN, RXVSAMBA and VTOC. If you have those installed already
+    at the required levels then you can ignore the JMKLOADL job.
+ -  Exit the dialog.
+ -  Use ISPF 3.4 to access the newly created prodct lib. Change member
+    WFMDIALX with the new library names.
+ -  Execute the WFMDIALX member.
+ -  Use the ST command to verify dataset names, hit PF3 to get back to
+    the main main menu.
+ -  Open the admin section using command ADM.
+ -  From the 'Parmlib and settings' sub section, select 'Setlib' and
+    'WFMJOBPM' to update values. In 'Setlib' you should at least
+    update the VOLSEL member.
+ -  From the 'List or maint' sub section select JDBUPD 'Add or delete
+    records by various criteria', add SYSIN 'ADDVOL' followed by
+    volser of one of your disks, and run the job. If no error
+    messages, then change 'TYPRUN(SIM)' to 'TYPRUN(RUN)' and run the
+    job again.
+ -  When the job has finished then use the M command to switch to the
+    member section, then search for a member from the datasets you
+    just loaded to verify the installation. Then jump to the dataset
+    section using the DSN command, enter an asterix in the 'Dataset'
+    field and press enter. You should see a list of pds/e for the
+    selected volume.
+ -  Determine which daily update job to use - JDAILYH for SMF history,
+    or JDAILYL if you use the SMF logger. Update the selected job. The
+    preceeding job JMKPARML will have created the WFM setlib member
+    WFMSMFSL for the JDAILYL job - do check.
+ -  Copy member WFMDIALX to a global SYSEXEC lib, edit the copy. It
+    allows you to start the app using 'TSO WFMDIALGX' command in ISPF.
+ -  See 'The SETLIB feature' below for a recommended further setup.
+
+ Upgrading database
+
+  Start the dialog using the new build, then use the Adm commmand to
+  open the admin section.
+  -  If you are upgrading from 2 v010 databases use job JDBCV0D.
+  -  If you are upgrading from 1 v011 database use job JDBCV1D.
+
+ Download the 'WFMDOCPD' member, if included, as something.PDF and
+ open it to see a somewhat more user-friendly documentation.
+
+
+The SETLIB feature
+
+ The SETLIB is a library where modified members may reside. Using
+ SETLIB prevents customized members from being overwritten by a
+ product update, hence it is recommended.
+
+ The library is allocated by the WFMPROC procedure for batch programs.
+
+ The dialog accepts parameter SETLIB(dsname) which names the library
+ where the WFMSET member is found. See the WFMDIALX member for a
+ sample.
+
+
+Principles of operation
+
+ The WFM infrastructure consists of a VSAM database containing
+ dataset- and member info.
+
+ The database is initially loaded using VTOC scans.
+
+ The database is updated by a daily run which scans SMF data for
+ dataset catalog, update, scratch and rename. Both old-fashioned SMF
+ history datasets and SMF logstreams are supported. Use either job
+ JDAILYL or JDAILYH as reference.
+
+ Members with invalid names like 'B+......' are dropped durning load.
+
+ You can use the dialog while the update is running.
+
+ The application is built using freeware programs PDSMAIN (PDS86),
+ REXXVARS, RXVSAMBA, RXSAFCHK, RXUCBSCN, and VTOC from www.cbttape.org
+ file 192, 112 and 669 respectively. The newest versions of REXXVARS,
+ RXVSAMBA, RXSAFCHK, and RXUCBSCN, are found at my website listed at
+ the top. A copy of those programs is provided as part of the WFM
+ package. The copies may not be the latest available versions by the
+ time you install this package, but they have been tested with the
+ package. An alternate to PDSMAIN can be used by modifying the
+ WFMPDSM= operand in the WFMSET member. SERENAs STARTOOL program has
+ the same functionality and syntax as PDSMAIN as fas as I am aware.
+
+ Several of the jobs use IBM DFSORT and ICETOOL. If you do not have
+ those installed, I hope that you have useful equvivalents. Otherwise
+ drop me a note and I will see what I can do.
+
+
+The ISPF dialog
+
+ Start the dialog with this TSO command:
+    ex 'findmbr.lib(WFMDIALX)'
+ Or (recommended) copy and edit the WFMDIALX member as described in
+ the 'Getting started' section above, then use command
+    TSO WFMDIALX membername/mask
+ To really make it fly, you should add this command to an ISPF command
+ table.
+
+ Use the dialog command HELP to see available primary- and line
+ commands.
+
+
+Daily update
+
+ Determine which job to use, depending on whether a SMF logstream is
+ avaiable or not. Sample job JDAILYL reads from a logstream, JDAILYH
+ reads from a history dataset.
+
+ Edit the latest run info in the PARM dataset member LASTDATE. Enter
+ the date when you started to add data to the databases.
+
+ Edit and run the JDAILYL or JDAILYH member. The DATE= parameter is
+ only used if you want to extract from a specific date range. The
+ default is to read the parm member LASTDATE.
+
+ Run the dialog to verify the updates.
+
+
+Resynchronize
+
+ Setup job based on JDBUPD with UPDVOL statements to rescan disks at
+ regular intervals.
+
+ Run the JSYNCVOL job to update according to changes in the volume
+ config.
+
+
+Ad-hoc update
+
+ Edit and run the JDBUPD member to update specific datasets and/or
+ disks.
+
+
+Security considerations
+
+ The database is read directly by the dialog, so must have universal
+ access READ. The userid for the update job must be able to read all
+ PDS(E) datasets and update the databases, so it is recommended that
+ the userid for the update job has the OPERATIONS attribute.
+
+
+Notes to wildcard selections
+
+ The dialogs and some of the batch utilities support wildcards in
+ names. The wildcards are '%' for a single character and '*' for zero
+ or more characters. The wildcarding differs from i.e. ISPF 3.4
+ dataset display in that dataset qualifiers have no special meaning, a
+ datasetname is just a string. Or in other words, a double asterix
+ does not mean zero or more qualifiers.
+
+
+*END

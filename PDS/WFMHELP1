@@ -1,0 +1,87 @@
+)Attr default(#}{)
+ @ area(scrl) extend(on)
+ { type(input)  caps(off) hilite(uscore) color(turq)
+ } type(text )  color(green)
+ ! type(text )  color(blue)
+)BODY expand(\\) width(80)
+#\ \ Find member dialog \ \}
+#ISPF Command {ZCMD \ \{scrl}
+}
+!   Use the#RIGHT!or#ENTER!key to scroll down,#LEFT!key to scroll up,
+!   command#UP!to return to main HELP, command#END!to return to dialog.
+@SAREA1\ \@
+)AREA SAREA1
+}
+#General information.
+} The WFM dialog shows captured data from when members are added or
+} updated. Deleted members are removed from the database and thus
+} cannot be shown.
+}
+#Panel info
+} -  The panels typically contains an input field for selection data.
+} -  The panels are screen size sensitive, you will see a different
+}    layout depending on whether the screen is wider or slimmer than
+}    120 characters. It also adjusts to the hight by supressing some
+}    blank lines if the screen hight is less than 30.
+} -  The input field allows mask when noted. Mask characters are % for
+}    a single character and * for many or no characters.
+}
+} Notes to the member list.
+}  -  The 'Cat' columm shows if the dataset is cataloged - Y means yes,
+}     N means no and O means cataloged to another volume.
+}     Dataset access is in any case done using the volser, if possible.
+}
+} Notes to the dataset list.
+}  -  The 'Ty' columm shows the dataset type L for loadlib and S for
+}     source.
+}  -  The 'Do' columm shows the dataset organisation.
+}  -  The 'Rf' columm shows the dataset record format.
+}  -  The 'Mbrn' columm shows the number of members for partitioned
+}     datasets. This information may not be present and was in any case
+}     computed the last time the updater job ran.
+}  -  The 'Cat' columm shows if the dataset is cataloged.
+}
+#General primary commands
+} Adm           Switch to administration display.
+} ALL           Show all records (alias for the RESET command).
+} Dsn_Ýd¨       Switch to dataset display, optionally with a
+}               datasetname.
+} Find_Ýt_Ýd¨¨  Find text t with optional direction d from the current
+}               top line. t must be quoted if it contains one of the
+}               direction kwywords. d can be FIRST, LAST, PREV or NEXT,
+}               where NEXT is default. Note that d may actually be
+}               specifed before t and Find may be entered without any
+}               parameters for a repeated find (though only for NEXT).
+} Key_Ýk¨       Switch to member-by-datasetkey display, optionally with
+}               a key.
+} Mbr_Ým¨       Switch to member display, optionally with a membername.
+} Only_t        Show only lines containing t. t is case insensitive.
+}               t may contain mask characters * and/or %. If mask
+}               characters are not used, then *t* is assumed.
+} RESet         Show all lines.
+} SORT_n        Sort by name. The valid sort criteria are
+}                Member display
+}                 -  NAME, DSNAME, DSN, or DATE. Null equals name.
+}                    DATE actually sorts by date}time.
+}                Dataset display
+}                 - NAME, DSNAME, DSN, VOLSER or VOL. Null equals name.
+} STate         Show dialog and database states.
+} Vol_Ýv¨       Switch to volume display, optionally with a volser.
+} Where_t       Alias of Only, see that for details.
+}
+} o  Switching beteen displays are horizontally, meaning that switching
+}    to i.e. the DSN display and then hitting END/RETURN will terminate
+}    the dialog.
+} o  Dataset- and membername must be at least 3 characters, volser may
+}    be a single asterix.
+} o  Filter characters are % for a sngle character, and * for many or
+}    none.
+}
+#Line commands
+} The ones shown. Line commands specifying dataset- or member access
+} will perform the action against the actual dataset or member.
+}
+}
+)Init
+)Proc
+)End

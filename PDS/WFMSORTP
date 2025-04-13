@@ -1,0 +1,22 @@
+/*                                                                    rexx
+ Run internal sort.
+
+ Sort program is defined by the WFMSET variable WFMISORT, default is
+ REXXVARS.
+
+ Sample:
+   sortpgm=WFMSORTP()                        /* read program into a variable */
+    . . .
+  DoSort: Interpret sortpgm; return 0        /* run sort for name in arg(1)  */
+*/
+
+ return space(,                                  /* return program           */
+ "if value(arg(1)'0')<2 then rc=0;",
+ "else select;",
+   "when $wfmisort='REXXVARS' then",
+     "Call RexxVars 'sort stem('arg(1)')' arg(2);",
+   "when $wfmisort='BPXWUNIX' then",
+     "call bpxwunix 'sort',arg(1),arg(1),'STDERR.';",
+   "otherwise rc=99;",
+ "end;",
+ )

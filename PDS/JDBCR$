@@ -1,0 +1,61 @@
+)CM Create database
+)CM The skeleton may be included from another, in which case
+)CM we do not want to generate a job statment.
+
+)SEL &JDBCR$NJ NE Y
+)SET JOBPARMS = WFMMKDB1,WFM-create-db
+)IM WFM$JBST
+//   SET     WFMLIB=&WFMLIB
+//   JCLLIB  ORDER=(&&WFMLIB)
+//   INCLUDE MEMBER=WFMSET
+//   SET     WFMLOAD=SYS1.LINKLIB
+)ENDSEL
+)SET  JDBCR$NJ = &Z
+
+//*
+//* WFM Create database
+//*
+)REXX WFMLIB DBDS DBSP DBSS NOW
+ if datatype(dbsp)<>'NUM' then dbsp=100
+ dbss=(dbsp+1)/100*20
+ dbss=space(format(dbss,6,0),0)
+ now = Insert('-',Insert('-',date('s'),6),4) time()
+)ENDREXX
+//* 1. Make DB id record
+//DBI      EXEC WFMRXINS
+//DBI      DD UNIT=3390,DISP=(,PASS),DSN=&&&&DBI,
+//            RECFM=VB,LRECL=256,BLKSIZE=0,SPACE=(TRK,(1))
+ dbr.1='<<created by wfm v&$wfmver &now. by &zuser.>>'
+ "execio 1 diskw dbi (stem dbr. finis)"
+ say 'Id record written:' dbr.1
+//* 2. Define cluster
+//DEFDBS   EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DBI      DD DISP=OLD,DSN=&&&&DBI
+//SYSIN    DD *
+ /* DELETE &DBDS CLUSTER */
+ SET MAXCC = 0
+ DEFINE CLUSTER( -
+          NAME(&DBDS) -
+          CYLINDER(&DBSP &DBSS) -
+          KEYS(20 0)  -
+          RECORDSIZE(70 120) -
+          SHR(3,3) -
+)SEL &DBVL NE &Z
+          VOL(&DBVL) -
+)ENDSEL
+)SEL &DBSC NE &Z
+          STORCLAS(&dbsc) -
+)ENDSEL
+         ) -
+         INDEX(CISZ(4096))
+ REPRO INFILE(DBI) OUTDATASET(&DBDS)
+)SEL &RCLMCA EQ Y
+//*
+//* Set RECLAIMCA option
+//*
+//RCA      EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+ ALTER &DBDS RECLAIMCA
+)ENDSEL

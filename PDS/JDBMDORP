@@ -1,0 +1,98 @@
+)CM ?? Delete orphaned member records    ? skel ?
+)SET JOBPARMS = WFMDMORP,WFM-del-mbr-orphans
+)IM WFM$JBST
+//*
+//* Delete orphaned member records
+//*
+//   SET     PM='''MSGLVL(0) TYPRUN(SIM)''' DBUpdate parms
+//*  SET     PM='''MSGLVL(1) TYPRUN(RUN)''' DBUpdate parms
+//   SET     WFMLIB=&WFMLIB
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+
+//*
+//* Split db records into dsn- and mbr sets
+//*
+//SPLIT    EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//SORTSNAP DD DUMMY
+//SORTIN   DD DISP=SHR,DSN=&$WFMDB
+//LIST     DD SYSOUT=*
+//ALERT    DD SYSOUT=*
+//MBR      DD DSN=&&&&MBR,DISP=(,PASS),
+//             UNIT=3390,SPACE=(CYL,(50,50),RLSE),
+//             RECFM=FB,LRECL=12,BLKSIZE=0
+//DSN      DD DSN=&&&&DSN,DISP=(,PASS),
+//             UNIT=3390,SPACE=(CYL,(5,5),RLSE),
+//             RECFM=FB,LRECL=12,BLKSIZE=0
+ SORT FIELDS=(1,12,CH,A)
+ OUTFIL FNAMES=MBR,
+        INCLUDE=(1,1,CH,NE,C'0',
+             AND,1,1,CH,NE,C'<<',
+             AND,1,1,CH,NE,C'-'),
+        BUILD=(9,12)
+ OUTFIL FNAMES=DSN,
+        INCLUDE=(1,1,CH,EQ,C'0'),
+        BUILD=(2,12)
+//*
+//* Select unpaired member records
+//*
+//UNPAIRED EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//IN1      DD DISP=(OLD,DELETE),DSN=&&&&DSN
+//IN2      DD DISP=(OLD,DELETE),DSN=&&&&MBR
+//SORTOUT  DD UNIT=3390,DISP=(,PASS),DSN=&&&&UNPAIRD,
+//            RECFM=FB,LRECL=12,BLKSIZE=0,SPACE=(TRK,(5,5))
+//SYSIN    DD *
+* Control statements for JOINKEYS application
+ JOINKEYS F1=IN1,FIELDS=(1,12,A)
+ JOINKEYS F2=IN2,FIELDS=(1,12,A)
+ JOIN UNPAIRED,F2,ONLY
+* Control statement for main task
+ OPTION COPY
+//*
+//* Drop duplicates
+//* Note, sets rc 12 if input is empty
+//*
+//NODUP    EXEC  PGM=ICETOOL
+//TOOLMSG  DD SYSOUT=*
+//DFSMSG   DD SYSOUT=*
+//IN       DD DISP=(OLD,DELETE),DSN=&&&&UNPAIRD
+//OUT      DD UNIT=3390,DISP=(,PASS),DSN=&&&&UNIQUE,
+//            RECFM=FB,LRECL=12,BLKSIZE=0,SPACE=(TRK,(1,1))
+//TOOLIN DD *
+* Check for input
+  COUNT FROM(IN) EMPTY
+* Select first record with each key.
+  SELECT FROM(IN) TO(OUT) ON(1,12,CH) FIRST
+//*
+//* List unpaired
+//*
+//P1       EXEC PGM=IEBGENER
+//SYSPRINT DD DUMMY
+//SYSIN    DD DUMMY
+//SYSUT1   DD DISP=OLD,DSN=&&&&UNIQUE
+//SYSUT2   DD SYSOUT=*
+//*
+//* Generate WFM delete statements
+//*
+//GENDEL   EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=(OLD,DELETE),DSN=&&&&UNIQUE
+//SORTOUT  DD UNIT=3390,DISP=(,PASS),DSN=&&&&GENDEL,
+//            RECFM=FB,LRECL=80,BLKSIZE=0,SPACE=(TRK,(1,1))
+ SORT FIELDS=COPY
+ OUTFIL BUILD=(C'DELTXT 9 ',1,12,59X)
+//*
+//* List WFM delete statements
+//*
+//P2       EXEC PGM=IEBGENER
+//SYSPRINT DD DUMMY
+//SYSIN    DD DUMMY
+//SYSUT1   DD DISP=OLD,DSN=&&&&GENDEL
+//SYSUT2   DD SYSOUT=*
+//*
+//* Delete records by text
+//*
+//DBUPD    EXEC WFMPROC,PG=WFMDBUPD,PM=&&PM
+//SYSIN    DD DISP=(OLD,DELETE),DSN=&&&&GENDEL

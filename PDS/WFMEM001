@@ -1,0 +1,18 @@
+/*                                                            rexx
+  Edit macro - change lines starting with .n into note lines
+*/
+ Address Isredit "MACRO PROCESS (PRM)"
+ if rc<>0 then do    /* not edit macro */
+   exit 0
+ end
+
+ Address Isredit
+ "(recs) = linenum .zlast"
+ Do n=1 to recs
+   "(s) = line" n
+   if translate(word(s,1))<>'.*' then iterate
+   s=substr(s,4)
+   "line_before" n "= NOTELINE (s)"
+ End
+ "exclude .* 1 2 all"
+ if rc=0 then "del all x"

@@ -1,0 +1,259 @@
+ /* WFMSMFUP                                                   rexx
+
+  Make input for the db update program from SMF data.
+  Filter datasets.
+
+ Parameters
+  MSGLVL(n)            1 shows more messages i.e. dsn db updates
+                       2 also show mbr db updates
+  TYPRUN(t)            SIM or RUN
+  GENOUT(dd)           Libref for generated commands. If not used
+                       then the updater program is called directy.
+
+ History
+  2022-11-17  Fix type 61 bad handlig of volser
+  2022-11-20  Volume filter is now in the WFMVOLL subroutine.
+  2023-05-01  Add counters. Retain only last volser/dsname
+              combination, which requires that the input list is
+              sorted descending.
+  2023-07-19  Fix for dataset with no dot.
+  2024-10-23  Add more diagnostics in the TESTDSN routine.
+  2024-11-13  Rewrite for single db and for new WFMDBUPD pgm.
+
+ */
+ parse source sys @what @me ddn @where .
+ $rc=0
+ zz=Xmsg(@me 'Started' time())+xmsg()
+ Interpret WFmGSet()
+
+ /* parm parser */
+ parse value 'RUN' with $typrun $genout
+ parse value copies('0 ',20) with $msglvl ds#. dsc. del# add# upd# cat# ,
+   addl. dell. .
+ if arg(1)<>'' then do
+   arg p    /* upcase parms */
+   call xmsg 'Parms:' p
+   Interpret WfmParse(p,,
+     'msglvl(#) typrun(run sim) genout(*) ','$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)+8
+ end
+ ?sim=($typrun='SIM')
+ if ?sim & $msglvl=0 then $msglvl=1
+ call xmsg '  Runtype ' $typrun
+ call xmsg '  Msglvl  ' $msglvl
+ call xmsg '  Genout  ' $genout
+ call xmsg '  Database' $wfmdb
+ call xmsg ''
+
+ /* SMF record mapping vars                                     */
+ /* record field positions are offset from the manual -3        */
+ ofs     = -3     /* offset modifier */
+ rty@    = 5+ofs
+ rty#    = 1
+ sub@    = 22+ofs
+ sub#    = 2
+ typ@    = 119+ofs
+ typ#    = 1
+ enm@    = 120+ofs
+ enm#    = 44
+ crc@    = 208+ofs                  /* type 61 begin */
+ crlen@  = 1
+ crlen#  = 2
+ crxty@  = crlen@+crlen#
+ crxty#  = 1
+ crtyp@  = crxty@+crxty#+1
+ crtyp#  = 1
+ crvol@  = 101
+ crvol#  = 6                        /* type 61 end   */
+
+ /*--------------------------------------------------------------------
+                    Setup system volume filter
+ --------------------------------------------------------------------*/
+ sysvol.=0
+ Parse value WfmVoll('sys','volser','=') with cc txt
+ do n=1 to words(txt)
+   v=word(txt,n)
+   sysvol.v=1
+ end
+
+ /*--------------------------------------------------------------------
+                        Process SMF records
+ --------------------------------------------------------------------*/
+ ds.=''
+ readcnt=0
+ dscnt=0
+ call xmsg time() 'SMF processing started'
+ do forever
+   "Execio 100  diskr smfin (stem r.)"
+   if r.0=0 then leave
+   readcnt=readcnt+r.0
+   do rn=1 to r.0
+     rty= substr(r.rn,rty@,rty#)
+     id = c2d(rty)
+     cmd=''
+     select
+       when id=15 then do
+         parse var r.rn . =39 rin +1 . =65 dsn +44 . =183 vol +6 .
+         dsn=strip(dsn)
+         if $msglvl>1 then call xmsg 'smf15   ' vol dsn
+       /*Call gencmd 'UPD',vol,dsn*/
+         if \Testdsn(dsn) then iterate   /* not valid name */
+         a=vol||dsn
+         if addl.a    then iterate       /* duplicate */
+         if dell.a    then iterate       /* duplicate */
+         addl.a=1
+         dell.a=1
+         upd#=upd#+1
+         parse value del#+1 dsn vol ';15' with del# del.del#
+         parse value add#+1 dsn vol ';15' with add# add.add#
+       end
+       when id=17 then do
+         parse var r.rn . =41 dsn +44 . =91 vol +6 .
+         dsn=strip(dsn)
+         if $msglvl>1 then call xmsg 'smf17   ' vol dsn
+       /*Call gencmd 'SCR',vol,dsn*/
+         if \Testdsn(dsn) then iterate   /* not valid name */
+         a=vol||dsn
+         if dell.a    then iterate       /* duplicate */
+         dell.a=1
+         parse value del#+1 dsn vol ';17' with del# del.del#
+       end
+       when id=18 then do
+         parse var r.rn . =41 dsn +44 . =85 nds +44 . =135 vol +6 .
+         dsn=strip(dsn)
+         nds=strip(nds)
+         if $msglvl>1 then call xmsg 'smf18   ' vol dsn'->'nds
+       /*Call gencmd 'NDO',vol,dsn*/
+       /*call gencmd 'NDN',vol,nds*/
+         if \Testdsn(dsn) then iterate   /* not valid name */
+         if \Testdsn(nds) then iterate   /* not valid name */
+         a=vol||dsn
+         if dell.a    then iterate       /* duplicate */
+         dell.a=1
+         a=vol||nds
+         if addl.a    then iterate       /* duplicate */
+         addl.a=1
+         parse value del#+1 dsn vol ';18' with del# del.del#
+         parse value add#+1 nds vol ';18' with add# add.add#
+       end
+       when id=61 then do
+         parse var r.rn =(enm@) dsn +(enm#) =(crc@) crc
+         parse var crc =(crlen@) crlen +(crlen#),
+                       =(crtyp@) crtyp +(crtyp#)
+         crlen=c2d(crlen)
+         vol=copies('?',crvol#)
+         if crtyp='A' then do
+           v@=crvol@
+           if crlen=096 then v@=79       /* position in shorter record */
+           if crlen=124 then v@=126      /* position in longer record  */
+           vol=substr(crc,v@,6)
+         end
+         if $msglvl>1 then call xmsg 'smf61   ' vol dsn
+       /*Call gencmd 'CAT',vol,dsn*/
+         cat#=cat#+1
+       end
+       otherwise nop
+     end
+   end
+ end
+ "Execio 0 diskr smfin (finis)"
+ call xmsg time() 'SMF processing done'
+ dl.0=dscnt
+ call xmsg '# SMF records read  ' readcnt
+ call xmsg '# adds generated:   ' add#
+ /*ll xmsg '# updates generated:' upd# */
+ call xmsg '# deletes generated:' del#
+ if $genout<>'' then,
+ call xmsg 'Write cmds to:      ' $genout
+ call xmsg ''
+ if add#+del#=0 then Exit Xmsg()+Xmsg(@me 'No commands generated' time())+1
+
+ /*-------------------------------------------------------------------
+                      Build updater input dataset
+ -------------------------------------------------------------------*/
+
+ call xmsg time() 'Control record builder started'
+ /* start with deletes       */
+ "delstack"
+ if del#>0 then do
+   call xmsg 'Build' del# 'delete statements'
+   queue 'DELDSN ('
+   do #=1 to del#
+     queue del.#
+   end
+   queue ')'
+ end
+
+ /* then do adds             */
+ if add#>0 then do
+   call xmsg 'Build' add# 'add statements'
+   queue 'ADDDSN ('
+   do #=1 to add#
+     queue add.#
+   end
+   queue ')'
+ end
+ call xmsg time() 'Control record builder ended'
+
+ /* Make output dataset instead of running updater */
+ if $genout<>'' then do
+   call xmsg 'Write commands to' $genout
+   "execio" queued() "diskw" $genout "(finis)"
+   exit xmsg(@me 'Commands written' time() 'rc' rc)+(8*(rc<>0))
+ end
+
+ /* Run updater */
+ call xmsg ''
+ call xmsg 'Running updater with' queued() 'updates'
+ call xmsg ''
+ cc=WfmDbUpd('sysin(stack) typrun('$typrun') msglvl('$msglvl')')
+ "delstack"       /* just in case */
+ if cc>0 then zz=xmsg(@me 'Updater rc' cc)+SetRc(min(cc,8))
+ Exit Xmsg()+Xmsg(@me 'Ended' time() 'rc' $rc)+$rc
+
+ /* test for valid datasetname */
+TestDsn:
+ trace off
+ arg tds .
+ parse var tds q1 '.' q2 '.' qr
+ if left(q1,3)='SYS' & datatype(substr(q1,4,5))='NUM',
+   & length(q2)=7 & left(q2,1)='T',
+   & datatype(substr(q2,2,6))='NUM',
+   then return 0    /* sysdsn */
+ tdrsn='SPFTEMP'
+ if left(q2,7)='SPFTEMP' then return 0 /* ISPF temp */
+ tdrsn='SPFLOG'
+ if left(q2,6)='SPFLOG'  then return 0 /* ISPF log  */
+ tdrsn='ISPF backup'
+ if (left(q2,3)='ISP' | left(q2,3)='ISR'),
+   & datatype(substr(q2,4,3))='NUM',
+   & qr='BACKUP'  then return 0 /* ISPF backup */
+ p=pos('.',tds)
+ if p=0 then return xmsg('****No dot in dataset' tds)
+ tdrsn='SRCHFOR list'
+ if substr(tds,p)='.SRCHFOR.LIST' then return 0
+ tdrsn='SUPERC list'
+ if substr(tds,p)='.SUPERC.LIST'  then return 0
+ p=lastpos('.',tds)
+ parse var tds . =(p) +1 lq
+ tdrsn='GDS'
+ if left(lq,1)='G' & right(lq,3)='V00' & datatype(substr(lq,2,3))='NUM',
+   then return 0    /* gds */
+ tdrsn=''
+ return 1 /* ok */
+
+SetRc: $rc=max(arg(1),$rc);return 0
+
+XMsg:
+ if arg(1)='' & lastxmsg='' then return word(arg(2) 0,1)
+ say arg(1)
+ lastxmsg=arg(1)
+ return word(arg(2) 0,1)
+
+SetRc: $rc=max(arg(1),$rc);return 0
+
+XMsg:
+ if arg(1)='' & lastxmsg='' then return word(arg(2) 0,1)
+ say arg(1)
+ lastxmsg=arg(1)
+ return word(arg(2) 0,1)

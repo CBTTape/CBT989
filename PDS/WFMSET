@@ -1,0 +1,18 @@
+//* V012 Settings
+//* Dataset prefix for service datasets, i.e. sort extracts
+//   SET WFMDSPF=A.FINDMBR
+//* Settings library
+//   SET WFMSETLB=A.FINDMBR.SETLIB
+//* Database
+//   SET WFMDB=A.FINDMBR.DB
+//* Volser for service datasets if not SMS managed
+//   SET WFMDSV=CBTU01
+//* Volser for databases. leave xxxxxx if SMS managed
+//   SET WFMDBV=CBTU03
+//* SMF history dataset used as input if not logstream
+//   SET WFMSMFH=A.FINDMBR.SMF.EXTRACT
+//* Allow alternate name for PDSMAIN/PDS86, i.e. STARTOOL
+//   SET WFMPDSM=PDSMAIN
+//* ISPLLIB for the dialog, STEPLIB for batch jobs if modules are not
+//* in link- or lpalist.
+//   SET WFMLOAD=SYS1.LINKLIB

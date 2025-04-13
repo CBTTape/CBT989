@@ -1,0 +1,8 @@
+* Copy SMF for the FindMbr app
+* Sort is descending to allow for retaining of last vol/dsn
+* combination.
+ OPTION  EQUALS,VLSHRT,VLSCMP
+ SORT FIELDS=(11,4,BI,D,7,4,BI,D)
+* type 15 only dasd non-temp , type 61 only non-vsam
+ OMIT  COND=((6,1,BI,EQ,15,AND,43,1,BI,NE,X'20'),   15 DASD + NON-TEMP
+          OR,(6,1,BI,EQ,61,AND,120,1,CH,NE,C'A'))   61 A = non-vsam

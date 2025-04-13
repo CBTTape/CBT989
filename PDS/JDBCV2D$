@@ -1,0 +1,100 @@
+)CM Create single v012 db from v011 dsn+mbr dbs
+
+)SET JOBPARMS = WFMCV1DB,Findmbr-DB-ConvTo1
+)IM WFM$JBST
+//*
+//* Create single db from dsn+mbr dbs
+//* Verify/edit the new database name.
+//* Check output from the DBSTAT step, adjust space def and
+//* rerun the job if the new DB is vastly overallocated.
+//* !! Remember to update the WFMSET member afterwards !!
+//*
+//    SET WFMLIB=&$wfmlib
+//    JCLLIB ORDER=(&WFMLIB)
+
+)SET DBVOL = &$WFMDBV
+)REXX PSPC SSPC DBCVDSN DBCVMBR DBCVNEW DBVOL
+ if datatype(pspc)<>'NUM' then pspc=100
+ sspc=pspc%10                    /* 10 pct slack */
+ pspc=pspc+sspc
+ if sspc=0 then sspc=sspc+1      /* ensure at least 1 cyl */
+)ENDREXX
+
+//*-
+//* Create new db, then copy member records
+//*-
+)CM do not create another jobstatement
+)SET  JDBCR$NJ = Y
+)IM JDBCR$
+//*-
+//* Copy member records
+//*-
+//MBRCOPY  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//MBRDB    DD DISP=SHR,DSN=&DBCVMBR
+//WFMDB    DD DISP=SHR,DSN=&DBCVNEW
+ REPRO INFILE(MBRDB) OUTFILE(WFMDB)
+//*-
+//* Unload dataset records
+//*-
+//DSNUNLD  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DSNDB    DD DISP=SHR,DSN=&DBCVDSN
+//DSNUNLD  DD DISP=(,PASS),DSN=&&&&DSNDB,
+//            UNIT=3390,RECFM=VB,LRECL=100,BLKSIZE=0,
+//            SPACE=(CYL,(2,2))
+ REPRO INFILE(DSNDB) OUTFILE(DSNUNLD)
+//*-
+//* Reformat dataset records
+//*-
+//REFMT    EXEC WFMRXINS
+//V010     DD DISP=OLD,DSN=&&&&DSNDB
+//V012     DD DISP=(,PASS),DSN=&&&&V012,
+//            UNIT=3390,RECFM=VB,LRECL=100,BLKSIZE=0,
+//            SPACE=(CYL,(2,2))
+//REXX     DD *
+ /*
+ dsname record layout
+ v010  dsnkey volser dsname ..rest..
+ V012  0||||dsnkey,dsnvol,dsnname';'...rest...
+ */
+ address tso
+ tn=0
+ bn=200
+ say 'Dataset record reformat started...'
+ do until rn<<bn
+   "execio" bn "diskr v010"
+    rn=queued()
+    tn=tn+rn
+    do rn
+      parse pull key vol rest
+      queue '0'key','left(vol,6)','translate(rest,';',' ')
+    end
+   "execio" queued() "diskw v012"
+ end
+ say 'Dataset record reformat ended,' tn 'records processed.'
+ "execio 0 diskr v010 (finis)"
+ "execio 0 diskw v011 (finis)"
+//*-
+//* Load dataset records
+//*-
+//DSNLOAD  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//LIST     DD SYSOUT=*
+//DSNDATA  DD DISP=OLD,DSN=&&&&V012
+//DB       DD DISP=SHR,DSN=&DBCVNEW
+//SYSIN    DD *
+ REPRO INFILE(DSNDATA) OUTFILE(DB)
+//*-
+//* Stats for new db
+//*-
+//DBSTAT   EXEC WFMRXINS
+ /* Show basic stats for new DB */
+ db='&dbcvnew'
+ r=WfmVsInf(db,'data.space_pri data.usepct data.volser')
+ parse var r pspc pct'.'. dbvol .
+ say 'DBname         ' db
+ say 'Allocated space' pspc
+ say 'Use pct        ' pct
+ say 'Used space     ' pspc*pct%100
+//*

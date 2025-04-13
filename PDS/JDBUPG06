@@ -1,0 +1,165 @@
+//WFMDBU06 JOB (1),'WFM-upgrade-dbs',
+//* RESTART=MKDBS.WFMRUNS1,
+//         CLASS=A,COND=(0,LT),REGION=0M
+//*
+//* WFM - upgrade databases to new v006 format
+//*
+//* The record structures are the same, but the timestamps are
+//* adjusted to allow for longer unique-ness.
+//*
+//* Note, you really should run the database maintenance jobs
+//* before this job, to ensure that the databases are as sound
+//* as possible.
+//*
+//   SET     WFMLIB=&WFMLIB
+//   JCLLIB  ORDER=&WFMLIB
+//   INCLUDE MEMBER=WFMSET
+//   SET     CURDDB=SYS2.FINDMBR.DSNDB <<-- current dataset db
+//   SET     CURMDB=SYS2.FINDMBR.MBRDB <<-- current member dv
+//*
+//* Unload dataset db
+//*
+//DX       EXEC PGM=IEFBR14
+//OFL      DD DISP=(MOD,DELETE),DSN=&WFMDSPF..DSNDB.OFL,
+//            SPACE=(TRK,1),RECFM=VB,LRECL=100,BLKSIZE=0
+//*
+//DC       EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DB       DD DISP=SHR,DSN=&CURDDB
+//SQ       DD DISP=(,CATLG),DSN=&WFMDSPF..DSNDB.OFL,
+//            SPACE=(CYL,(2,20),RLSE),RECFM=VB,LRECL=100,BLKSIZE=0
+ REPRO INFILE(DB) OUTFILE(SQ)
+//*
+//* Unload member db
+//*
+//MX       EXEC PGM=IEFBR14
+//OFL      DD DISP=(MOD,DELETE),DSN=&WFMDSPF..MBRDB.OFL,
+//            SPACE=(TRK,1),RECFM=VB,LRECL=100,BLKSIZE=0
+//*
+//MC       EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DB       DD DISP=SHR,DSN=&CURMDB
+//SQ       DD DISP=(,CATLG),DSN=&WFMDSPF..MBRDB.OFL,
+//            SPACE=(CYL,(50,150),RLSE),RECFM=VB,LRECL=100,BLKSIZE=0
+ REPRO INFILE(DB) OUTFILE(SQ)
+//*
+//* Format reload datasets
+//*
+//UX       EXEC PGM=IEFBR14
+//DD1      DD DISP=(MOD,DELETE),DSN=&WFMDSPF..DSNDB.UPG,
+//            SPACE=(TRK,1),RECFM=VB,LRECL=100,BLKSIZE=0
+//DD2      DD DISP=(MOD,DELETE),DSN=&WFMDSPF..MBRDB.UPG,
+//            SPACE=(TRK,1),RECFM=VB,LRECL=100,BLKSIZE=0
+//*
+//UPG      EXEC WFMRXINS
+//DSNIN    DD DISP=SHR,DSN=&WFMDSPF..DSNDB.OFL
+//DSNOUT   DD DISP=(,CATLG),DSN=&WFMDSPF..DSNDB.UPG,
+//            SPACE=(CYL,(2,20),RLSE),RECFM=VB,LRECL=100,BLKSIZE=0
+//MBRIN    DD DISP=SHR,DSN=&WFMDSPF..MBRDB.OFL
+//MBROUT   DD DISP=(,CATLG),DSN=&WFMDSPF..MBRDB.UPG,
+//            SPACE=(CYL,(50,150),RLSE),RECFM=VB,LRECL=100,BLKSIZE=0
+//REXX     DD *
+ numeric digits 12
+ Interpret WfmRxSet()
+
+ /* Copy dataset db records with updated date
+
+    dsndb record sample
+    ----+----1----+----2----+---
+    756219333556 SYSAS1 SYSA.AXR.EXEC PO VB 255 27998 Y
+ */
+ call xmsg 'Database upgrade started'
+ say 'Datedif='dbdcdif
+ say ''
+ say 'Do dataset db copy'
+ dn=0
+ do forever
+   "Execio 1000 diskr DSNIN (stem r.)"
+   dn=dn+r.0
+   if r.0=0 then leave
+   do n=1 to r.0
+     parse var r.n kd +4 rest
+     nk = right(kd-dbdcdif,4,0)
+     if kd>nk then r.n= nk || rest /* new dsndb record */
+   end
+   "Execio" r.0 "diskw DSNOUT (stem r.)"
+ end
+ "Execio 0 diskr DSNIN  (finis)"
+ "Execio 0 diskw DSNOUT (finis)"
+ say dn 'dataset records processed'
+ say ''
+
+ /* Copy member db records with updated date
+
+    mbrdb record sample
+    ----+----1----+----2----+---
+    ASMTEST\756219442857WJ;89/....
+ */
+ say 'Do member db copy'
+ mn=0
+ do forever
+   "Execio 1000 diskr MBRIN (stem r.)"
+   mn=mn+r.0
+   if r.0=0 then leave
+   do n=1 to r.0
+     parse var r.n mbr +8 kd +4 rest
+     nk = right(kd-dbdcdif,4,0)
+     if kd>nk then r.n=mbr || nk || rest  /* new dsndb record */
+   end
+   "Execio" r.0 "diskw MBROUT (stem r.)"
+   if mn//50000=0 then say mn 'records processed so far'
+ end
+ "Execio 0 diskr MBRIN  (finis)"
+ "Execio 0 diskw MBROUT (finis)"
+ say mn 'member records processed'
+ say ''
+ exit xmsg('Ended')
+
+XMsg: if arg(1)<>'' then say time() 'WFMUPG' arg(1);return word(arg(2) 0,1)
+//*
+//* (re)Create databases
+//*
+//MKDBS    EXEC WFMRUN,P='IDCAMS EDIT(SYSIN)'
+//SYSPRINT DD SYSOUT=*
+//DSNS     DD DISP=SHR,DSN=&WFMDSPF..DSNDB.UPG
+//MBRS     DD DISP=SHR,DSN=&WFMDSPF..MBRDB.UPG
+//SYSIN    DD *
+ PARM GRAPHICS(CHAIN(SN))
+ /* delete old               */
+ /* DELETE &WFMDSN CLUSTER   */
+ /* DELETE &WFMMBR CLUSTER   */
+ /* SET MAXCC=0              */
+
+ /* Dataset database         */
+ DEFINE CLUSTER( -
+          NAME(&WFMDSN)         -
+          CYLINDER(2 2) -
+          KEYS(&DDBKEYLEN. 0)  -
+          RECORDSIZE(60 120) -
+          SHR(3,3) -
+          VOL(&WFMDBV) -
+         ) -
+         INDEX(CISZ(4096))
+ ALTER &WFMDSN RECLAIMCA
+ REPRO INFILE(DSNS) OUTDATASET(&WFMDSN)
+
+ /* Member database         */
+ DEFINE CLUSTER( -
+          NAME(&WFMMBR)         -
+          CYLINDER(50 50) -
+          KEYS(&MDBKEYLEN. 0)  -
+          RECORDSIZE(60 100) -
+          SHR(3,3) -
+          VOL(&WFMDBV) -
+         ) -
+         INDEX(CISZ(4096))
+ ALTER &WFMMBR RECLAIMCA
+ REPRO INFILE(MBRS) OUTDATASET(&WFMMBR)
+//*
+//* Delete work datasets
+//*
+//DX2      EXEC PGM=IEFBR14
+//DD1      DD DISP=(OLD,DELETE),DSN=&WFMDSPF..DSNDB.OFL
+//DD1      DD DISP=(OLD,DELETE),DSN=&WFMDSPF..DSNDB.UPG
+//MD1      DD DISP=(OLD,DELETE),DSN=&WFMDSPF..MBRDB.OFL
+//MD1      DD DISP=(OLD,DELETE),DSN=&WFMDSPF..MBRDB.UPG

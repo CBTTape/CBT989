@@ -1,0 +1,82 @@
+/*                                                                 rexx
+ VSAM list parser (handles cluster, data and index components)
+  -  Do listcat
+  -  Parse listing
+  -  Return requested values. Varnames are formatted from the list
+     with underscores substituting minus and blanks, i.e. IN-CAT ->
+     IN_CAT and DATA SET ENCRYPTION -> DATA_SET_ENCRYPTION.
+  Note that fields not found in the list are returned as blanks.
+
+ Parameters
+  1  entry name and list type i.e. ALL
+  2  list of returned values, see sample.
+
+ Sample - returns a string of values, delimited by commas.
+  r=VsamPars('A.FINDMBR.V010.MBRDB',,
+       'cluster.in_cat","',
+       'data.volser"," data.rec_total"," data.hi_a_rba data.hi_a_rba","',
+       'data.tracks"," data.usepct"," data.system_timestamp')
+ say 'returned:' r
+ exit 0
+VsamPars: Procedure                              /* VSAM report parser       */
+*/
+
+ parse value '' with cluster. data. index.
+ arg n t                                         /* parse arg 1              */
+ if t='' then t='ALL'
+ zz=outtrap('vsl.')
+ Address TSO "LISTCAT ENT('"strip(n,"b","'")"')" t
+ zz=outtrap('off')
+
+ signal on syntax name Process_VSR_err
+ signal off syntax
+ $sect=''
+ $vfy ='ABCDEFGHIJKLMNOPQRSTUVWXYZ_'
+ do rn=1 to vsl.0
+   Call Process_VSR vsl.rn
+ end
+ /* track calculation assume 3390 */
+ if data.tracks<>'' then,
+   data.tracks=15*(data.space_pri+(data.space_sec*(data.extents-1)))
+ if data.hi_u_rba<>'' then,
+   data.usepct=format(data.hi_u_rba/data.hi_a_rba*100,3,1)
+ if index.hi_u_rba<>'' then,
+   index.usepct=format(index.hi_u_rba/index.hi_a_rba*100,3,1)
+ Interpret "Return" arg(2)
+
+Process_VSR:
+ arg r
+ i=verify(r,' ','n')                             /* pos of first non-blank   */
+ if i=6  & pos('-',r)=0 then return 0            /* heading                  */
+ if i<=4 then do                                 /* section start            */
+   parse value space(translate(r,' ','-')) with $sect n
+   zz=value($sect'.name',n)
+   return 0
+ end
+ if $sect='' then return 0
+ p=pos("' SEQ-SET",r)                             /* special case 1          */
+ if p>0 then r=insert(' ',r,p+1)
+ p=wordpos('SYSTEM-TIMESTAMP:',r)                 /* special case 2          */
+ if p>0 then,
+   r=delword(r,p,1)'  SYSTEM-TIMESTAMP--'word(value('vsl.'rn+1),p)
+ r=strip(r)'  '
+ do until r=''
+   r=strip(r,'l')
+   p=pos('  ',r)
+   parse var r k =(p) r
+   parse var k k'--'v
+   k=space(translate(strip(k),'__','- '))
+   if pos('(',k)>0 then parse var k k'(' +0 v
+   v=strip(strip(v,'l','-'))
+   if v='' then v='Y'
+   k=translate(k,'_','/')                        /* i.e. CI/CA               */
+   k=space(translate(k,' ','%'),0)               /* i.e. FREESPACE-%CI       */
+   if Verify(k,$vfy,'n')>0 then nop /*say 'bad name' k */
+   else zz=value($sect'.'k,v)
+ end
+ return 0
+
+Process_VSR_err:
+ return 0
+ say '*Syntax' rc 'in line' sigl':' Errortext(rc)
+ say Sourceline(sigl)

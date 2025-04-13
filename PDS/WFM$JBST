@@ -1,0 +1,28 @@
+)CM Generate job statement
+)IM WFM$JBPM
+
+)REXX JOBPARMS JOBNAME JOBTEXT JOBCOND
+ if jobparms<>'' then do
+   parse var jobparms jobname .','jobtext .
+   if jobtext='' then jobtext='WFM-'jobname
+ end
+ if jobcond='' then jobcond='(0,LT)'
+)ENDREXX
+
+//&jobname JOB (&jobaccnt),'&jobtext',
+)SEL &JOBEXECL NE &Z
+//       CLASS=&jobexecl,
+)ENDSEL
+)SEL &JOBMSGLV NE &Z
+//       MSGLEVEL=&jobmsglv,
+)ENDSEL
+)SEL &JOBTIME  NE &Z
+//       TIME=&jobtime,
+)ENDSEL
+)SEL &JOBCOND  NE &Z
+//       COND=&jobcond,
+)ENDSEL
+)SEL &JOBNTFY  NE &Z
+//       NOTIFY=&jobntfy,
+)ENDSEL
+//       REGION=&jobrgn

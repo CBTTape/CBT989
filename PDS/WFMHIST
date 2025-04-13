@@ -1,0 +1,99 @@
+Change history
+
+Ver Date Text
+
+002
+ -  The SMF filters have been modified, so at the very least you must
+    replace the members WFMSMHI2 WFMSMLI3 and WFMSMXI1.
+
+005
+ -  The database keys have been changed.
+ -  Add SPANINC=RC0 to WFMSMHI2
+
+006
+ -  New list and maintenance jobs.
+ -  Lots of internal changes
+ -  Reworked dialog with new dataset- and volume displays
+
+007
+ -  Add SAF check to the WFMDBUPD 'add'.
+ -  Restructure the daily job to minimize number of update commands
+    generated.
+
+008
+ -  Better member handling, thanks to a new build of the RXVSAMBA
+    program.
+
+009
+ 2024-04-11  SORT command for member and dataset
+ 2024-04-23  Fix missing ADDESS ISPEXEC in the MBRLIST routine.
+ 2024-04-29  Some updates to main screen text. Add FIND to HELP.
+ 2024-05-01  Update the DB create dialog. Small change to STATE
+             display.
+ 2024-05-02  Mbrinfo and STATE displays scroll for small screens.
+ 2024-05-03  Move internal HELP to external tuturial panel(s).
+ 2024-05-06  New WFMXSET member, move WFMSET member to parmlib, update
+             the admin dialog and a number of jobs accordingly.
+ 2024-05-09  Use SAYs instead of ISPMSG for some initial messages.
+
+010
+ 2024-06-17  Update the dialog and a number of installation tasks.
+ 2024-07-21  Check that only one instance is running
+ 2024-07-26  Update volume dataset totals display.
+ 2024-07-27  Major rewrite of the dialog.
+ 2024-07-27  SORT command for member and dataset
+ 2024-07-27  New STate display.
+ 2024-07-27  New Where command.
+ 2024-07-27  SClStat, call new VSAM info routine WfmVsInf.
+ 2024-08-19  Add dataset DM and I lcmds.
+ 2024-08-13  Add major command Key (members by dataset-key)
+ 2024-09-11  Some fixes to the DOPROMPT and CLOSE routines.
+ 2024-09-12  Add volser to dsname dsnlist (lcmd D)
+ 2024-10-07  Test return code for displaying ISPPDA#S. Move PDAINIT
+             call.
+
+011
+ 2024-07-31  Single-db feature.
+ 2024-09-18  WFMVOLL Add filter to all vol list generators.
+ 2024-10-11  WFMVOLL Allow unlimited number of volumes in
+             include/exclude.
+ 2024-10-11  DBUPD allow pattern in ADDVOL volume selection
+ 2024-10-12  DBUPD ADDDSN test for temp dsn, ADDDSN, DELDSN and UPDDSN
+             using mask.
+ 2024-10-14  WFMCPARS Add better syntax check.
+ 2024-10-14  New panel member WFMPDA#S added copy of own ISPPDA#S
+             panel.
+ 2024-10-14  ADDDSN test for volume is online.
+ 2024-10-15  Dialog - new dataset- and member list linecmd DL -
+             dataset list
+ 2024-10-16  WFMDBUPD fix bad test for ADDVOL *.
+ 2024-10-22  WFMDBLST add 'data added' to dsname list. Some small
+             fixes to the Make 1 db job.
+ 2024-10-23  WFMCPARS Allow empty data in a parm member, i.e. VOLLST.
+ 2024-10-24  WFMCPARS Fix lpcda-lpcds selection error.
+ 2024-11-05  WFMVOLL Set ALLOW(NULL) in call to WFMCPARS.
+ 2024-11-07  Updates to installaton job JMKPARML and daily job JDAILYL.
+
+011
+ 2024-11-09  Dual db dropped, only single db is supported.
+ 2024-11-09  WFMVOLL Rewritten.
+ 2024-11-13  WFMDBUPD lookup database instead of catalog for volser.
+ 2024-11-14  Insert comma in db dsname section after volser.
+
+012
+ 2024-11-20  Slightly changed db format.
+             Major rewrite.
+ 2024-11-22  WFMDIALG Better key/mask handling in MBRDATA part for
+             much improved GET performance.
+ 2024-11-23  WFMDBUPD Show deleted datasets for msglvl > 0
+ 2024-11-23  WFMDBUPD Fix member selection for descrete name.
+ 2024-11-25  Replace internal sorts with loadable WFMSORTP for
+             performance. Includes new WFMSET parm WFMISORT. See
+             member WFMSORTP for details.
+             Change dataset allocation unit to 3390.
+ 2024-12-03  New REXXVARS.
+ 2024-12-09  WFMDIALG fix bad linecmd selection after WHERE filter.
+             WFMDIALG New VOL lcmd DD (Datasets in Db).
+             WFMDIALG Fix SETLIB selection issue.
+             JMKPRDL$ Update SETs at top, include WFM$JCLL.
+             - CBT cut -

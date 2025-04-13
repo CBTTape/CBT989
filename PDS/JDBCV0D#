@@ -1,0 +1,42 @@
+)ATTR
+ +  type(text) color(green)
+ %  type(text) color(white)
+ "  type(text  ) color(blue  )
+ #  type(input ) color(turq  ) hilite(uscore) caps(on)
+ !  type(output) color(turq  )
+ @  type(output) color(yellow)
+)BODY EXPAND(\\)
+%\ \Consolidate two v010 databases into one v012\ \+
+%Cmd =>_zcmd \ \+    +
++
++
+%Database names
++ Old dataset db     #dbcvdsn                                    +
++  -  member db      #dbcvmbr                                    +
++
++ New consolidated db#dbcvnew                                    +
++
+"           All names must be fully qualified, quotes are ignored
++
+%Space definitions
++ Cylinders #dbsp +  +assume 4000 records per cyl, 150 mbrs per dsn
++ Volume    #dbvl  +
++
+%Options
++ Reclaim CA#z+ n/Y
+)INIT
+ .zvars = '(rclmca)'
+ &dbds = &$WFMMBR
+ if (&dbsp EQ &Z) &dbsp = 50
+ if (&dbvl EQ &Z) &dbvl = &$dbvol
+ if (&rclmca EQ &Z) &rclmca = Y
+)PROC
+ &drec = &Z
+ Ver (&dbcvdsn,nb,dsname)
+ Ver (&dbcvmbr,nb,dsname)
+ Ver (&dbcvnew,nb,dsname)
+ Ver (&dbsp,nb,num)
+ &mrec = &Z
+ Ver (&rclmca,nb,list,N,Y)
+ &dbds = &dbcvnew
+)END

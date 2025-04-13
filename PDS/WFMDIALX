@@ -1,0 +1,13 @@
+ /*                                                                rexx
+  Drive the Willow Find-member (WFM) dialog.
+  Specify library where the WFMSET member is located.
+  Note, the 'address ispexec' is used instead of a straight TSO EX
+  as problems like the one described in IBM APAR number PH40067 were
+  encountered.
+ */
+ $wfmlib='DVL.PP.FINDMBR.V012.LIB'     /* FINDMBR product lib    */
+ $setlib='DVL.PP.FINDMBR.V012.SETLIB'  /* Local settings         */
+ address ispexec,
+ "Select cmd(EX '"$wfmlib"(WFMDIALG)' 'setlib("$setlib")",
+   "chkver(y)" arg(1)"')"
+ exit 0

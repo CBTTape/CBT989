@@ -1,0 +1,65 @@
+)CM WFM Skeleton
+)CM History
+)CM  2024-12-09  Update SETs at top, include WFM$JCLL
+
+)SET JOBPARMS = WFMMKPLB,Findmbr-make-prodlib
+)IM WFM$JBST
+//*
+//   SET     WFMLIB=&wfmlib
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+//*
+//*   Make/Update product lib
+)REXX ISLIB,ISWFMSET,PRDLIB,ISPDSE
+ islib=(sysdsn("'"prdlib"'")='OK')
+ ispdse=0
+ if islib then do
+   cc=ListDsi("'"prdlib"'")
+   ispdse=(SYSDSSMS='PDSE')
+ end
+ iswfmset=(sysdsn("'"prdlib"(WFMSET)'")='OK')
+)ENDREXX
+//*
+)SEL    &PRDDEL EQ Y
+//DELETE   EXEC PGM=IEFBR14
+//PRODLIB  DD DISP=(MOD,DELETE),DSN=&prdlib,
+//            UNIT=3390,SPACE=(TRK,(1,1,1))
+)ENDSEL &PRDDEL EQ Y                                         /*0000021*/
+)SEL    &ISLIB EQ 0 OR &PRDDEL EQ Y
+)SET V = &Z
+)IF &PRDVOL NE &Z THEN )SET V = ,VOL=SER=&prdvol
+//ALLOC   EXEC PGM=IEFBR14
+//PRODLIB  DD DISP=(,CATLG),DSN=&prdlib,
+//            UNIT=3390,RECFM=FB,LRECL=80,BLKSIZE=0,
+//            DSNTYPE=LIBRARY,            **note**
+//            SPACE=(TRK,(15,15,40))&V
+)ENDSEL &ISLIB EQ 0 OR &PRDDEL EQ Y                          /*0000026*/
+)SEL    1 EQ 0
+//BCKLIB   DD DISP=(,CATLG),DSN=&zuser..FINDMBR.LIB.BCK,
+//            UNIT=3390,RECFM=FB,LRECL=80,BLKSIZE=0,
+//            SPACE=(TRK,(15,15,40))&V
+)ENDSEL 1 EQ 0                                               /*0000035*/
+//*
+//COPY     EXEC WFMRXINS
+//REXX     DD *
+)SEL    &ISLIB EQ 1
+)CM "Pds86 '&prdlib' del $:Y "
+ "Pds86 '&prdlib' fix reset"
+)SEL    &ISPDSE EQ 0
+ "Pds86 '&prdlib' compress shr"
+)ENDSEL &ISPDSE EQ 0                                         /*0000046*/
+)ENDSEL &ISLIB EQ 1                                          /*0000043*/
+ "Pds86 '&wfmlib'",
+   "Copy ($$readme,F:Y) '&prdlib' repl"
+)SEL    &ISLIB EQ 1
+)REXX ISMBR,PRDLIB
+ ismbr=(sysdsn("'"prdlib"(WFMDOCPD)'")='OK')
+)ENDREXX
+)ENDSEL &ISLIB EQ 1                                          /*0000052*/
+)SEL    &ISMBR EQ 1
+ "Pds86 '&prdlib' delete WFMDOCPD"
+)ENDSEL &ISMBR EQ 1                                          /*0000057*/
+)SEL    &ISLIB EQ 1 AND &ISPDSE EQ 0
+ "Pds86 '&prdlib' compress shr"
+)ENDSEL &ISLIB EQ 1 AND &ISPDSE EQ 0                         /*0000060*/
+//*

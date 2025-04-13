@@ -1,0 +1,24 @@
+/*                                                                rexx
+  Run external SORT
+  Parms:  options, sort command
+  Sort data must have been written to SORTIN prior to calling pgm.
+*/
+
+ if arg(1)<>'' then r.1 = ' OPTION' translate(arg(1))
+ else r.1='* no options'
+ "execio 1 diskw dfsparm (stem r. finis)"
+
+ r.1 = ' SORT' translate(arg(2))
+ "execio 1 diskw sysin  (stem r. finis)"
+
+ "Call *(SORT)"
+ src=rc
+
+ if src<>0 then do
+   "execio * diskr sysout (stem sout. finis)"
+   do n=1 to sout.0
+     say sout.n
+   end
+   return xmsg('SORT rc' src,8)
+ end
+ Return 0

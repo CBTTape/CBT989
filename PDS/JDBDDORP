@@ -1,0 +1,19 @@
+)CM ?? Delete orphaned dataset- and associated member records ? skel ?
+)SET JOBPARMS = WFMDDORP,WFM-del-dsn-orphans
+)IM WFM$JBST
+//*
+//* Delete orphaned dataset- and associated member records
+//* Only mounted volumes are checked.
+//*
+.*
+.*   We recommend that you do a TYPRUN(SIM) before TYPRUN(RUN).
+.*
+//   SET     WFMLIB=&wfmlib
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+//*
+.*   Parameters
+.*     MSGLVL(m)    gt 0 provides more informative messages.
+.*     TYPRUN(t)    RUN or SIM. RUN is default.
+//GO       EXEC WFMPROC,PG=WFMDDORP,PM='MSGLVL(1) TYPRUN(SIM)'
+//*        EXEC WFMPROC,PG=WFMDDORP,PM='MSGLVL(1) TYPRUN(RUN)'

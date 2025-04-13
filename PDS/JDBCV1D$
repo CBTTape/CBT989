@@ -1,0 +1,79 @@
+)CM Create single v012 db from dsn+mbr dbs
+
+)SET JOBPARMS = WFMCV1DB,Findmbr-DB-ConvTo1
+)IM WFM$JBST
+//*
+//* WFM Convert consolidated v011 db to v012 format
+//*
+//* !! Remember to update the WFMSET member afterwards !!
+//*
+//    SET WFMLIB=&$wfmlib
+//    JCLLIB ORDER=(&WFMLIB)
+//    SET WFMLOAD=SYS1.LINKLIB
+)SET DBVOL = &$WFMDBV
+
+//*-
+//* Create new db
+//*-
+)CM do not create another jobstatement
+)SET  JDBCR$NJ = Y
+)IM JDBCR$
+
+//*
+//* Make member records offload
+//*
+//UNLDM    EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=SHR,DSN=&dbcvold
+//SORTOUT  DD DISP=(,PASS),DSN=&&&&MBRUNLD,
+//            UNIT=3390,SPACE=(CYL,(50,50),RLSE),
+//            RECFM=VB,LRECL=100
+//SYSIN    DD *
+ OPTION EQUALS,VLSHRT,VLSCMP
+ SORT FIELDS=COPY
+ INCLUDE COND=(5,1,CH,NE,C'0',
+           AND,5,1,CH,NE,C'<<',
+           AND,5,1,CH,NE,C'-')
+//*
+//* Make dataset records offload and reformat
+//*
+//UNLDD    EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=SHR,DSN=&dbcvold
+//SORTOUT  DD DISP=(,PASS),DSN=&&&&DSNUNLD,
+//            UNIT=3390,SPACE=(CYL,(2,2),RLSE),
+//            RECFM=VB,LRECL=100
+//SYSIN    DD *
+* 1       10        20        30        40
+* K---+----+----+----K----+----+----+----+
+* reformat
+*     0174712464148*******SYSAU1DVL.AUTHLIB;P
+* to
+*     0174712464148,SYSAU1,DVL.AUTHLIB;P
+  OPTION EQUALS,VLSHRT,VLSCMP
+  SORT FIELDS=COPY
+  INCLUDE COND=(5,1,CH,EQ,C'0')
+  OUTFIL  BUILD=(1,17,C',',25,6,C',',31)
+//*-
+//* Sort and load
+//*-
+//SORTLOAD EXEC PGM=SORT
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=(OLD,DELETE),DSN=&&&&MBRUNLD
+//         DD DISP=(OLD,DELETE),DSN=&&&&DSNUNLD
+//SORTOUT  DD DISP=OLD,DSN=&dbcvnew
+//SYSIN    DD *
+  SORT FIELDS=(5,20,CH,A)
+//*-
+//* Stats for new db
+//*-
+//DBSTAT   EXEC WFMRXINS
+ /* Show basic stats for new DB */
+ db='&dbcvnew'
+ r=WfmVsInf(db,'data.space_pri data.usepct data.volser')
+ parse var r pspc pct'.'. dbvol .
+ say 'DBname         ' db
+ say 'Allocated space' right(pspc,5) 'cyls'
+ say 'Use pct        ' right(pct,5)
+ say 'Used space     ' right(pspc*pct%100,5) 'cyls'
+//*

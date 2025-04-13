@@ -1,0 +1,97 @@
+)CM WFM Skeleton
+
+)SET JOBPARMS = WFMMKLDL,Findmbr-make-loadlib
+)IM WFM$JBST
+//*
+//* Load programs to local pgmlib
+//*    PDS86 (PDSMAIN)
+//*    REXXVARS
+//*    RXSAFCHK
+//*    RXUCBSCN
+//*    RXVSAMBA
+//*    VTOC
+//*
+//   SET     WFMLIB=&WFMLIB
+//   JCLLIB  ORDER=(&&WFMLIB)
+//   INCLUDE MEMBER=WFMSET
+//   SET     WFMLOAD=SYS1.LINKLIB
+)REXX ISLIB LOADLIB
+ l="'"loadlib"'"
+ islib =  sysdsn(l)
+ islib = (sysdsn(l)='OK')
+)ENDREXX
+)SEL &ISLIB EQ 0
+//*
+//* Create loadlib
+//*
+//ALLOC   EXEC PGM=IEFBR14
+//DD1     DD DSN=&loadlib,DISP=(,CATLG),
+//        UNIT=3390,VOL=SER=&LOADVL,DCB=(SYS1.LINKLIB),
+//        SPACE=(TRK,(8,8,8))
+)ENDSEL
+)DEFAULT Ý&ÝÝÝÝÝ
+//*
+//* Install programs
+//*
+//R        EXEC WFMRXINS
+//REXX     DD DATA,DLM=@@
+ /*                                              rexx
+    Receive programs
+     PDS86
+     REXXVARS
+     RXSAFCHK
+     RXUCBSCN
+     RXVSAMBA
+     VTOC
+    Target lib &loadlib
+ */
+
+ /* set/edit definitions */
+ dlib='&WFMLIB'
+ llib='&loadlib'
+ lvol='&loadvl'                       /* volume for loadlib    */
+                                      /* or null for SMS alloc */
+ /* definitions end  */
+ say 'dlib='dlib
+ say 'llib='llib
+ say 'lvol='lvol
+ say ''
+ Call DoReceive 'EXTPDSM  PDS86'
+ Call DoReceive 'EXTRXVAR REXXVARS'
+ Call DoReceive 'EXTSAFCK RXSAFCHK'
+ Call DoReceive 'EXTUCBSC RXUCBSCN'
+ Call DoReceive 'EXTVSAMB RXVSAMBA'
+ Call DoReceive 'EXTVTOC  VTOC'
+ Exit xmsg('All done.,,')
+
+ /* go */
+DoReceive:
+ "delstack"
+ arg name .
+ if sysdsn("'"llib"'")='OK' then do
+   say 'Receive' name 'to existing lib' llib
+   p='SHR'
+ end
+ else do
+   say 'Receive' name 'to new lib' llib
+   p='new'
+   if lvol<>'' then p=p 'vol('lvol')'
+ end
+ queue "da('"llib"')" p
+ queue "end"
+ say "-> receive inda('"dlib"("name")') ->" p
+ cc=BpxWdyn('alloc da('dlib'('name')) rtddn(dd1) shr')
+ if cc<>0 then exit xmsg('alloc failed rc' cc)
+ pp=prompt('on')
+ resp.0=0
+ address TSO "receive indd("dd1")"
+ cc=rc
+ pp=prompt(pp)
+ zz=BpxWdyn('free dd('dd1')')
+ "delstack"
+ if cc=0 then return xmsg(name 'loaded')
+ say 'Ended due to error'
+ exit 12
+
+XMsg: if arg(1)<>'' then say arg(1);return word(arg(2) 0,1)
+@@

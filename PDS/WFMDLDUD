@@ -1,0 +1,87 @@
+/*                                                                    rexx
+   WFM DB Maintenance
+    - drop duplicate dataset records
+
+   Parm
+     MSGLVL(n)            1 shows more messages
+     TYPRUN(t)            SIM or RUN
+*/
+
+ parse source sys @what @me ddn @where .
+ pdsn.=''
+ zz=xmsg(@me 'Drop duplicate datasets started' time())+xmsg()
+ /* parm parser */
+ parse value '0 RUN SYSIN' with $msglvl $typrun $sysin .
+ if arg(1)<>'' then do
+   say 'Parms:' arg(1)
+   Interpret WfmParse(arg(1),'msglvl(#) typrun(run sim) sysin(*)','$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)
+ end
+ say '  Type run' $typrun
+ say '  Msglvl  ' $msglvl
+ Interpret WfmGset()
+ say '  DsnDB   ' $WFMDSN
+
+ if wordpos($typrun,'RUN SIM')=0 then exit xmsg('Invalid typrun',8)
+ call xmsg 'Testing for duplicate dataset entries'
+ say ''
+
+ /* test for duplicate datasets in db
+
+  see the WFMGSET member for record layouts
+
+  test is performed on volser+dsname
+ */
+
+ cc=RxVsamBa('Get dd('$wfmdd') stem(dbl.) key(0)')
+ if cc<>0 then exit xmsg('Read db rc' cc,8)
+ call xmsg 'Records read from db:' 0+dbl.0
+ /* scan backwards to id duplicate dsn/vol */
+ ds.=''
+ dupn=0
+ do n=dbl.0 to 1 by -1
+   Interpret "parse var dbl.n" $dbdparse
+   dr.dsnkey=dbl.n
+   k=dsnvol'\'dsnname
+   if ds.k='' then ds.k=dsnkey /* first or only */
+   else do                     /* duplicate     */
+     say 'duplicate' dr.dsnkey
+     dk=ds.k
+     say '       of' dr.dk
+     parse value dupn+1 dsnkey with dupn dup.dupn
+   end
+ end
+ if dupn=0 then exit xmsg('No duplicate datasets')
+ call xmsg 'Duplicates found: 'dupn
+ dup.0=dupn
+
+ /* Generate update stmts for update pgm */
+ updn=0
+ do n=1 to dup.0
+   say '  'dup.n
+   parse value 1+updn 'DELKEY 0'dup.n  with updn upd.updn
+ end
+ upd.0=updn
+
+ /* dry run */
+ if $typrun='SIM' | $msglvl>0 then do
+   call xmsg 'Update records generated..'
+   do n=1 to upd.0
+     say upd.n
+   end
+   if $typrun='SIM' then return 0
+ end
+
+ /* execute */
+ do n=1 to upd.0
+   queue upd.n
+ end
+ zz=xmsg()+xmsg('Running updater')+xmsg()
+ l=0
+ if $msglvl>0 then l=1
+ cc=WfmDbUpd('sysin(stack) msglvl('l')')
+ zz=xmsg()+xmsg('Updater ended rc' cc)+xmsg()
+
+ Exit xmsg('Maintenance done' time())
+
+XMsg: say arg(1);return word(arg(2) 0,1)

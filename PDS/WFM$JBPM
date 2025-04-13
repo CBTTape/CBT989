@@ -1,0 +1,12 @@
+)CM WFM$JBPM  Default job parameters
+)CM Change any value except JOBRGN to &Z to use your JES2 defaults.
+)CM JOBRGN is required as it terminates the parameter list.
+)SET JOBACCNT = 1
+)SET JOBEXECL = A
+)SET JOBMSGCL = T
+)SET JOBMSGLV = &Z
+)SET JOBTIME  = NOLIMIT
+)SET JOBNTFY  = &ZUSER
+)SET JOBNTFY  = &Z
+)SET JOBRGN   = 0M
+)CM Settings end

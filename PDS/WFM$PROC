@@ -1,0 +1,6 @@
+)CM Set WFMPROC name (not presently used)
+
+)SET WFMPROC = WFMPROC
+)SEL &WFMDB NE &Z
+)SET WFMPROC = WFM11PRC
+)ENDSEL

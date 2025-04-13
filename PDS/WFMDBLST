@@ -1,0 +1,476 @@
+/*                                                                    rexx
+ WFM DB list
+
+ Parameters
+  SYSIN(s)             Libref or STACK. Default is SYSIN
+  MSGLVL(n)            >0 for more messages
+  TYPRUN(RUN | SIM)    run mode
+  CMD(cmd)             command, will suppress headers.
+
+ Sysin
+  DSN name MBRS       list datasets, optionally with members
+  DSNKEY              list datasets by datasetkey
+  MBR name            list members with dataset key/mask
+  MBRKEY key          list members by dataset key
+  VOL volser          list datasetnames in db by disk
+  VOLList q           Where q is one of the following:
+                       ALL   combined list
+                       SYS   online dasd list
+                       DB    list of volser in database
+                       DBO   list of volser in database only
+                       SYSO  online dasd list where no db entries
+
+  All name, key and volser values may be a mask.
+  The MBRKEY command will take a long time as the entire member db must
+  be scanned.
+  The MBRS option will take a long time as the entire member db must
+  be scanned.
+
+ See WGMGSET member for record layouts
+
+ History
+  2022-10-26  New
+  2022-11-16  Some date/time fixes
+  2022-11-20  Drop VOLSERS command
+  2024-08-13  Support for v011 single db
+  2024-08-19  Add dsname to member list
+  2024-10-22  Add 'added date' to dataset list.
+  2024-11-25  New sort subroutine.
+*/
+
+ parse source sys @what @me ddn @where .
+ parse value copies('0 ',30) with $llvl dsnal.0 mbral.0 .
+ parse value '' with dsnbykey. dsnstore.
+ /*           id  header width adjust */
+ dsnrecdef= ' KEY Key    12 L',
+             'DSN Dsname 44 L',
+             'VOL Volser  6 L',
+             'PO  Po      3 L',
+             'RF  Rfm     3 L',
+             'LR  Lrecl   5 R',
+             'BS  Blksz   5 R',
+             'CAT Cat     3 C',
+             'MBN Mbrn    5 R',
+             'ADD Added  20 L'
+ mbrrecdef= ' NAME     Name     8 L',
+             'DKEY     DKey    12 L',
+             'USER     User     8 L',
+             'CDT      Credate 10 L',
+             'MDT      Moddate 16 L',
+             'SIZE     Size     6 r',
+             'ATTR     Attrib  20 L',
+             'MOD      Mod      8 L',
+             'VER      VerMod   8 L',
+             'SSI      SSI     16 L',
+             'ALOF     Aliasof  8 L',
+             'DSN      Dsname  44 L'
+ validcmds='DSN DSNKEY MBR MBRKEY VOL VOLLIST'
+ Interpret WfmGSet()                             /* set some globals         */
+ sortpgm=WFMSortP()                              /* load sort routine        */
+ if pos('CMD(',translate(arg(1)))=0 then,
+   zz=xmsg(@me 'DB list started' time(),
+               '(FINDMBR build' $wfmver $wfmbdate')')+xmsg()
+ /* parm parser */
+ parse value '0 RUN SYSIN' with $msglvl $typrun $sysin $cmd .
+ if arg(1)<>'' then do
+   arg p
+   Interpret WfmParse(p,'msglvl(#) typrun(run sim) sysin(*) cmd(*)','$')
+   if $cmd='' then say 'Parms:' p
+   if err<>'' then exit xmsg(@me 'Parse error:' err)
+ end
+
+ if $wfmdd='' then exit xmsg('Database is not allocated ('cc')',8)
+
+ /* command is in parm */
+ if $cmd<>'' then do
+   parse upper var $cmd c p
+   if Abbrev('VOLLIST',c,4) then c='VOLLIST'
+   if wordpos(c,validcmds)=0 then,
+     exit xmsg('Bad command' $cmd)+8
+   Interpret "Exit Do"c"('"p"')"
+ end
+
+ /* commands are in sysin or stack */
+ say '  DataDB  ' $WFMDB
+ say '  Msglvl  ' $msglvl
+ say '  Sysin   ' $sysin
+ if $msglvl=0 then say ''
+
+ /* Get control data */
+ cn=0
+ if $sysin='STACK' then do
+   n=queued()
+   do i=1 to n
+     parse pull inp.i
+   end
+   inp.0=n
+ end
+ else "execio * diskr" $sysin "(stem inp. finis)"
+ if $msglvl>0 then zz=xmsg()+xmsg('Input...')
+ do inpn=1 to inp.0
+   r=translate(strip(inp.inpn,'t'))
+   if $msglvl>0 then say ' 'r
+   if r='' | left(r,1)='*' then iterate
+   if Abbrev('VOLLIST',word(r,1),4) then r='VOLLIST' subword(r,2)
+   if wordpos(word(r,1),validcmds)=0 then do
+     if $msglvl>0 then exit xmsg('Bad command...')+8
+     exit xmsg('Bad command' r)+8
+   end
+   parse value 1+cn r with cn cntl.cn
+ end
+ if cn=0 then exit xmsg('Input is empty')+4
+ drop inp.
+ cntl.0=cn
+ if $msglvl>0 then say ''
+
+ do cntln=1 to cntl.0
+   parse upper var cntl.cntln cmd p
+   say space(cntl.cntln)
+   Interpret "Call Do"cmd "'"p"'"
+   say ''
+ end
+
+ /* end */
+ exit xmsg('List done' time())
+
+/*
+ List by dsname(s)
+*/
+DoDsn:
+ arg dp1 dp2 .
+ /*if pos('.',dp1)=0 then exit xmsg('name must have at least one dot (.)')+8*/
+ $llvl=$llvl+1
+ cc=RxVsamBa('Get dd('$wfmdd') mask('dp1') stem(dlist.)' $ddbvsbkey,
+             'pos('$ddbdsnpos') dlm('$ddbdlm')')
+ if cc<>0 then exit xmsg('List dsn db rc' cc+0 rxvberrm,8)
+ if dlist.0=0 then return xmsg('No records found')
+ ddif=$dbdcdif+(date('b')-date('c'))
+ dsnadd=''
+ Interpret,
+ "do dlistn=1 to dlist.0;",
+   "parse var dlist.dlistn" $dbdparse";",
+   "parse var dsnkey kd +4 th +2 tm +2 ts +2 tz;",                /*2024-10-22*/
+   "kd=kd+ddif;",                                                 /*2024-10-22*/
+   "dsnadd=nicedate(kd,'b')'.'th':'tm':'ts'.'tz;",                /*2024-10-22*/
+   "dlist.dlistn=left(dsnname,44) dsnvol dsnkey",
+      "dsndsorg dsnrecfm dsnlrecl dsnblksz dsncat dsnmbrn dsnadd;",
+ "end"
+ if dlist.0>1 then Call ISort 'dlist.'
+ Call MkHdr 'dsn vol key po rf lr bs cat mbn add',dsnrecdef,$llvl
+ do dlistn=1 to dlist.0
+   parse var dlist.dlistn dsn =46 vol key po rf lr bs cat mbn add .
+   Call MkRec 'dsn vol key po rf lr bs cat mbn add',dsnrecdef,$llvl
+   if dsnbykey.key='' then dsnbykey.key=dsn  /* for future ref */
+   if dp2='MBRS' then call DoMbrKey key 'nokeylist'
+ end
+ $llvl=$llvl-1
+ Return 0
+
+/*
+ List by dsname key(s)
+*/
+DoDsnKey:
+ arg dkey .
+ drop dlist. mlist.
+ /* get from dataset section */
+ cc=RxVsamBa('Get dd('$wfmdd') key(0'dkey') stem(dlist.)')
+ if cc<>0 then return xmsg('Db read' cc+0 rxvberrm)
+ if dlist.0=0 then return xmsg('Db read did not find any datasets')
+ dsnl=0
+ ddif=$dbdcdif+(date('b')-date('c'))
+ dsnadd=''
+ Interpret,
+ "do #=1 to dlist.0;",
+   "parse var dlist.#" $dbdparse";",
+   "parse var dsnkey kd +4 th +2 tm +2 ts +2 tz;",
+   "kd=kd+ddif;",
+   "dsnadd=nicedate(kd,'b')'.'th':'tm':'ts'.'tz;",
+   "dlist.#=dsnname dsnvol dsnkey dsnmbrn dsnadd;",
+   "dsnl=max(dsnl,length(dsnname));",
+   "dsnstore.dsnkey=left(dsnname,44) dsnvol;",
+ "end"
+ do #=1 to dlist.0  /* reformat */
+   parse var dlist.# dsnname dsnvol dsnkey dsnmbrn
+   dlist.#=left(dsnname,dsnl) dsnvol dsnkey dsnmbrn
+ end
+ if dlist.0>1 then Call ISort 'dlist.'
+ do dsnn=1 to dlist.0
+   parse var dlist.dsnn dsnname dsnvol dsnkey dsnmbrn .
+   Say MkDsnHdr()
+   Say MkDsnRec()
+   Call DoMbrKey dsnkey 'nokeylist'              /* get from member section  */
+ end
+ return 0
+
+/*
+ List by membername
+*/
+DoMbr:
+ arg dmp .
+ $llvl=$llvl+1
+ p=verify(dmp,'%*','m')
+ if p=0 then p='key('dmp')'
+ else if p=1 then p='mask('dmp') pos(1) endpos(8)'
+ else do
+   parse var dmp key =(p) mask
+   if key<>'' & mask='*' then p='key('key')'
+   else if key<>'' then p='key('key')',
+      'mask('mask') pos('p') endpos(8)'
+   else p='mask('mask') pos('p') endpos(8)'
+ end
+ p=p 'strip(\)'
+ cc=RxVsamBa('Get dd('$wfmdd') stem(mlist.)' p)
+ if cc<>0 then exit xmsg('List mbr db rc' cc+0 rxvberrm,8)
+ if mlist.0=0 then return xmsg('No records found')
+ do #=1 to mlist.0
+   mlist.#=translate(mlist.#,' ','\')
+ end
+ if mlist.0>1 then call ISort 'mlist.'
+ dombri=copies(' ',$llvl)
+ Call MkHdr 'name alof dkey mdt size attr dsn',mbrrecdef,$llvl
+ do mlistn=1 to mlist.0
+   parse var mlist.mlistn,
+     name +8 dkey +12 user';'cdt';'mdt';'ver';'mod';',
+     size';'init';'ssi';'attr';'alof
+   name=strip(name,'t','\')
+   if mdt<>'' then mdt=Cvdt(mdt)
+   else mdt=Cvdt(cdt)
+   attr=space(attr user)
+   if dsnbykey.dkey='' then do
+     cc=RxVsamBa('Get dd('$wfmdd') key('$ddbkeypfx||dkey') stem(l.)')
+     if cc=0 & l.0>0 then do
+       Interpret "parse var l.1" $dbdparse
+       dsnbykey.dsnkey=dsnname
+     end
+   end
+   dsn=dsnbykey.dkey
+   Call MkRec 'name alof dkey mdt size attr dsn',mbrrecdef,$llvl
+ end
+ $llvl=$llvl-1
+ Return 0
+
+/*
+ List by member dkey
+*/
+DoMbrKey:
+ arg mkp1 mkp2 .
+ ?dmklk =(wordpos('NOKEYLIST',mkp2)=0) /* show key */
+ ?dmkdsn=(wordpos('DSN',mkp2)>0)       /* show dsname */
+ $llvl=$llvl+1
+ dombri=copies(' ',$llvl)
+ if IsMask(mkp1) then,
+   cc=RxVsamBa('Get dd('$wfmdd') mask('mkp1') stem(mlist.)',
+               'pos('$mdbdkeypos') endpos('$mdbdkeypen')')
+ else,
+   cc=RxVsamBa('Get dd('$wfmdd') text('mkp1') stem(mlist.)',
+               'pos('$mdbdkeypos') endpos('$mdbdkeypen')')
+ if cc<>0 then exit xmsg('List mbr db rc' cc+0 rxvberrm,8)
+ if mlist.0=0 then do
+   $llvl=$llvl-1
+   return xmsg(dombri || 'No records found')
+ end
+ if mlist.0>1 then call ISort 'mlist.'
+ dsn=''
+ do mlistn=1 to mlist.0
+   parse var mlist.mlistn,
+     name +8 dkey +12 user';'credt';'moddt';'vermod';'mod';',
+     size';'init';'ssi';'attr';'aliasof
+   name=strip(name,'t','\')
+   credt=Cvdt(credt)
+   moddt=Cvdt(moddt)
+   /*Call ListVars 'name dkey user credt moddt vermod mod',
+                 'size init ssi attr aliasof' */
+   t='S'
+   if attr<>'' then t='L'
+   lr= dombri || left(name,8) left(aliasof,8)
+   if ?dmklk then lr=lr dkey
+   lr= lr left(moddt,16) right(size,6) left(space(attr user),8)
+   dsn=''
+   if ?dmkdsn then do
+     dsn=dsnstore.dkey
+     if dsn='' then do
+       cc=VsamAcc('Get dd('$wfmdd') key(0'dkey') stem(dlist.)')
+       if dlist.0>0 then do
+         Call MkDSnRec(dlist.1)
+         dsnstore.dkey=dsnname dsnvol
+         dsn=dsnstore.dkey
+       end
+     end
+     lr= lr space(dsn)
+   end
+   say lr
+   /*say dombri || left(name,8) left(aliasof,8) dkey, /*left(user,8), */
+        /*left(credt,10)*/ left(moddt,16) right(size,6) space(attr user)*/
+ end
+ $llvl=$llvl-1
+ Return 0
+
+/*
+ List dsnames by volser
+*/
+DoVol:
+ arg vp1 vp2 .
+ $llvl=$llvl+1
+ cc=RxVsamBa('Get dd('$wfmdd') stem(vlist.)' $ddbvsbkey,
+    'mask('vp1') pos('$ddbvolpos') dlm('$ddbdlm')')
+ if cc<>0 then exit xmsg('List dsn db rc' cc+0 rxvberrm,8)
+ if vlist.0=0 then return xmsg('No records found')
+ Interpret,                                      /* reorder fields            */
+ "do vln=1 to vlist.0;",
+   "parse var vlist.vln" $dbdparse";",
+   "vlist.vln=dsnvol left(dsnname,44) dsnkey",
+      "dsndsorg dsnrecfm dsnlrecl dsnblksz dsncat dsnmbrn;",
+ "end"
+ if vlist.0>1 then call ISort 'vlist.'
+ drop vol.
+ vol.=0
+ voll=''
+ do vln=1 to vlist.0                             /* get vollist from sorted  */
+    parse var vlist.vln v .
+    if \vol.v then parse value 1 voll v with vol.v voll
+ end
+ say 'Volumes selected:'voll
+ say ''
+
+ dodsni=copies(' ',$llvl)
+ Call MkHdr 'vol dsn key po rf lr bs cat mbn',dsnrecdef,$llvl
+ do vlistn=1 to vlist.0
+   parse var vlist.vlistn vol dsn key po rf lr bs cat mbn .
+   Call MkRec 'vol dsn key po rf lr bs cat mbn',dsnrecdef,$llvl
+ end
+ $llvl=$llvl-1
+ Return 0
+
+/*
+ List database and/or system volumes
+*/
+DoVolList:
+ arg dvp
+ dvp=word(dvp 'ALL',1)
+ $llvl=$llvl+1
+ /*=RxVsamBa('Get dd('$wfmdd') stem(vlist.)')
+ cc=RxVsamBa('get dd('$wfmdd') stem(vlist.)' $ddbvsbkey) */
+ drop b d s all sys db dbo syso
+ volh.ALL  ='List db and online dasd'
+ volh.SYS  ='List online dasd'
+ volh.DB   ='List of volser in database'
+ volh.DBO  ='List of volser in database only'
+ volh.SYSO ='List online dasd list where no db entries'
+ volt.     ='?'
+ volt.d    ='DB'
+ volt.s    ='Sys'
+ volt.b    ='Both'
+ Parse value WfmVoll(dvp,,'=') with cc txt
+ if cc<>0 then exit xmsg('Vol list rc' cc txt,8)
+ dvli=copies(' ',$llvl)
+ say dvli||volh.dvp
+ do while txt<>''
+   parse var txt vol type txt
+   say dvli left(vol,7) volt.type
+ end
+ $llvl=$llvl-1
+ Return 0
+
+/*
+ some subroutines
+*/
+XMsg: say arg(1);return word(arg(2) 0,1)
+XTso: trace off; zz=outtrap(word(arg(2) '$.',1))
+        address tso arg(1);zz=outtrap('off');xtsorc=rc;return rc
+
+LowCase: return translate(arg(1),xrange('a','z'),xrange('A','Z'))
+Upcase1: return bitor(Lowcase(arg(1)),'40'x)
+
+VsamAcc: /* parms  1: command  */
+ zz  =arg(1)
+ if $msglvl>2 then call xmsg 'VSAMACC' arg(1)
+ vscc=0+RxVsamBa(arg(1))
+ zz=rxvbread+0 rxvbwrit+0 rxvbdele+0
+ if $msglvl<3 & vscc<8 then return vscc
+ if rxvberrm<>'' then rxvberrm='msg' rxvberrm
+ vsem='VsamAcc' arg(1) 'rc' space(vscc rxvberrm)
+ call xmsg 'VsamAcc' arg(1) 'rc' space(vscc rxvberrm)
+ return vscc
+
+MkDsnHdr:
+ return left('Dsname',44) 'Volser Do Rf Lrecl Blksz Membn Cat Added'
+MkDsnRec:
+ if arg(1)<>'' then interpret "parse value arg(1) with" $dbdparse
+ return left(dsnname,44) dsnvol left(dsndsorg,2) left(dsnrecfm,2),
+        right(dsnlrecl,5) right(dsnblksz,5) right(dsnmbrn,5),
+        center(dsncat,3) dsnadd
+MkMbrHdr:
+ return 'Mbrname   User/options             Date     Time  Size'
+MkMbrRec:
+ if arg(1)<>'' then interpret "parse value arg(1) with" $dbmparse
+ return translate(mbrname,' ','\') left(' ',25),
+        left(word(left(mbrmoddt,8) mbrcredt,1),8),
+        left(substr(mbrmoddt,9),5) right(mbrsize,5)
+ Return 0
+
+IsMask:  /* return 1 (true) is mask */
+trace off
+ arg imp
+ return (pos('%',imp)>0) | (pos('*',imp)>0)
+ return 0
+
+ListVars:
+ arg lvl
+ do lvln=1 to words(lvl)
+   lvw=word(lvl,lvln)
+   say ' 'left(Upcase1(lvw),12) value(lvw)
+ end
+ return 0
+
+ListStem:
+ parse arg lsn .,lsh
+ lsn=translate(strip(lsn,'t','.'))'.'  /* ensure trailing dot */
+ if lsh<>'' then say lsh
+ lsnc=Value(lsn'0')                    /* get count */
+ lsf=copies(' ',$llvl+1)
+ do lsnn=1 to lsnc
+   say lsf||value(lsn||lsnn)
+ end
+ return 0
+
+NiceDate: return Insert('-',Insert('-',date('s',arg(1),arg(2)),6),4)
+
+Cvdt: Procedure
+ trace off
+ arg pd +8 pt
+ if pd='' then return ''
+ if left(pd,1)<50 then y='20'
+ else y='19'
+ if pt<>'' then pt=right(pt,5,'0')
+ return strip(y || translate(pd,'-','/') pt)
+
+ReConDate: /* reconstruct date from key */
+ Return Date('S',left(arg(1),4)+dbdcdif,'C')
+
+MkHdr:
+ parse arg mhp,mhdefrec,mhind
+ upper     mhp
+ mhr=copies(' ',mhind-1)
+ do mhi=1 to words(mhp)
+   mhn=word(mhp,mhi)
+   parse var mhdefrec (mhn) t l .
+   mhr=mhr left(t,l)
+ end
+ say mhr
+ return 0
+
+MkRec:
+ arg mrs,mrdefrec,mrind
+ upper mrs
+ mrr=copies(' ',mrind-1)
+ do mri=1 to words(mrs)
+   mrn=word(mrs,mri)
+   parse var mrdefrec (mrn) t l a .
+   if      a='L' then mrr=mrr     left(value(mrn),l)
+   else if a='R' then mrr=mrr    right(value(mrn),l)
+   else if a='C' then mrr=mrr center(value(mrn),l)
+ end
+ say mrr
+ return 0
+
+ISort: Interpret SortPgm; return 0

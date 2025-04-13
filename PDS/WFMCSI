@@ -1,0 +1,348 @@
+/*                                                                   REXX
+ Search ICF catalog(s), return entry name, type, volser(s) and
+ catalog name as a list, in the stack, in a global variable pool,
+ a table row or as a returned value.
+
+ Was: CSIREXX
+ Based on SYS1.SAMPLIB(IGGCSIRX)
+
+ Parameters  key Type(type) Cat(cat) Fields(fldlist) 1CAT(Y)
+             Return(ret,ropt1) FOrmat(format)
+
+   key       Like ISPF 3.4, except trailing '.**' must be used.
+             'MCName' returns the mastercatalog name.
+             'MCInfo' returns the mastercatalog name and volser.
+   type      Entry type CLUSTER DATA INDEX NONVSAM GDS GDG PATH
+             ALIAS AIX UCAT ATLLIB ATLVOL and special case CLNAME.
+             Can be abbreviated down to smallest unique value.
+             Multiple types can be speficied, seperated by comma or blank.
+             Note that type CLUSTER will return subset types DATA,
+             INDEX and AIX too.
+             CLNAME will return cluster names only.
+   cat       Name of catalog to search.
+             'MCat' substitutes the mastercatalog name.
+   fldlist   List of fields to return: NAME, TYPE, CAT, VOL, VOLS, CREDT
+             VOL means first or only volume, VOLS means volume 1-3.
+             Default if return  = 'LIST': NAME TYPE VOL CAT
+                     else : NAME, TYPE, CAT, VOLS
+   format    WIDE: do not compress generated text.
+             CSV: make comma separated text
+   1CAT(Y)   Search only a single catalog. Is forced when option
+             CAT(cat) is used.
+   ret|out   List    list (SAYs)
+             Queue   queue list to the stack
+             Gblv    write list to REXX global variable pool CSIREXX
+                     as stem 'CSI.'.
+                     Requires the REXXGBLV program.
+             Return  return the first or only entry. Useful when
+                     requesting info for a single entry.
+             RL      return all entries as one string, interspaced by
+                     commas.
+             Table tn  add to named ISPF table. The table variables
+                     can be DNAME, DTYPE, CATNAME VOLS or VOL.
+                     tn default is CSIREXX, in which case the table
+                     is deleted and created. If the table is not found,
+                     it will be created with fieldnames DNAME DTYPE VOLS
+                     CATNAME.
+             Note that output lines will be compressed except for
+             LIST, or if FORMAT(WIDE) is specified.
+
+ Samples
+
+   cc=CSIREXX('sys1.parm*.** r(q) f(name type cat credt vols)')
+   cc=CSIREXX(userid()'.** filter(pos(''APPLTRK'',dname)>0')
+
+ Tested sucessfully in Z/OS 1.13 and 2.3
+
+ Changelog
+ 2018-01-21  Initial version
+ 2018-01-22  New special keys: MCName, MCInfo.
+             Output to ISPF table
+ 2018-01-25  Add fieldname 'CREDT'
+             Add special key 'ALLCat'
+ 2018-03-01  Unquote key, just in case
+ 2020-07-24  Add proper table support.
+ 2020-11-05  Move 'control errors' to prevent err msg in non-ispf batch
+ 2024-09-30  Return null for 'RETURN' call with no result.
+ 2024-10-12  Add RETURN(RL) option.
+*/
+
+ /*--------------------------------------------------------------------
+                         inserted front end
+ --------------------------------------------------------------------*/
+
+ parse value copies('0 ',20) with $lstn $csin $clname  .
+ parse value 'L' with $return $filter,
+   $fields $key $type $catalog $1cat $format $rv
+
+ arg key prm
+ if left(key,3)='DS(' then key=substr(key,4,length(key)-4)
+ if key='' then return xmsg('Key missing')+8
+ key=unquote(key)  /* just in case */
+ /*if verify(key,
+    'ABCDEFGHIJKLMNOPQRSTUWVXYZÆØÅ0123456789@$#.*%','N')>0,
+     then return xmsg('Bad key')+8 */
+ do while prm<>''
+   parse value space(prm) with pvrb'('ptxt')' prm
+   vrb=AlExpand(pvrb,'TYPE CATALOG 1CAT RETURN OUTPUT FIELDS FILTER FORMAT')
+   if vrb='' then return xmsg('Invalid parm:' pvrb'('ptxt')')+8
+   zz=Value('$'vrb,ptxt)
+ end
+ $type=translate($type,' ',',')
+ $fields=translate($fields,' ',',')
+ if pos(',',$return)>0 then,
+   parse var $return $return','$retopt1','$retopt2','$retopt3','$retopt4
+ else,
+   parse var $return $return   $retopt1   $retopt2   $retopt3   $retopt4 .
+
+ if $output<>'' & $return='' then $return=$output
+ if $return<>'RL' then,
+   $return = left(AlExpand($return,'LIST GBLV QUEUE RETURN TABLE'),1)
+ if $return='' then return xmsg('Invalid RETURN value')
+ if wordpos($return,'L RL')>0 & $fields='' then $fields='NAME TYPE VOL CAT'
+ if $return<>'L' & $fields='' then $fields='NAME TYPE CAT VOLS'
+ if $type<>'' then do
+   l='CLUSTER DATA INDEX NONVSAM GDS GDG PATH ALIAS AIX UCAT CLNAME',
+     'ATLLIB ATLVOL'
+   tl=''
+   do while $type<>''
+     parse value strip($type) with t $type
+     txv=AlExpand(t,l)
+     if txv='' then return xmsg('Invalid type' t)+8
+     if txv='CLNAME' then $clname=1
+     tl=tl word('C D I A H B R X G U C L W',wordpos(txv,l))
+   end
+   $type=space(tl,0)
+ end
+ if $return='T' then do
+   address ispexec "control errors return"
+   $table=word($retopt1 'CSIREXX',1)
+   if $table='CSIREXX' then address ispexec "tbend" $table
+   address ispexec "tbquery" $table
+   if rc<>0 then,
+     address ispexec "tbcreate" $table "names(dname dtype catname vols)",
+        "nowrite share"
+ end
+
+ /* some special cases */
+ if Abbrev('MCAT',$catalog,2) ,
+  then $catalog=CsiRexx('sys1.parmlib fields(cat) return(r)')
+ if Abbrev('MCNAME',key,3) then,
+   return CsiRexx('sys1.parmlib fields(cat) return(r)')
+ if Abbrev('MCINFO',key,3) then,
+   return CsiRexx(CsiRexx('MCN') 'fields(name vol) return(r)')
+
+ if $catalog<>'' then $1cat='Y' /* force 1 catalog search */
+ if $format<>''  then if AlExpand($format,'WIDE CSV')='' then,
+   return xmsg('Invalid format')+8
+
+ /* fd.x : format definitions */
+ fd.1='left(dname,44) left(dtype,8) left(catname,44) left(vol1,6) vols credt'
+ fd.0='dname dtype catname vol1 vols credt'
+ $flddef=''
+ f=($return='L')
+ do i=1 to words($fields)
+   n = wordpos(word($fields,i),'NAME TYPE CAT VOL VOLS CREDT')
+   if n=0 then return xmsg('Invalid FIELDS value' word($fields,i))
+   $flddef = $flddef word(fd.f,n)
+ end
+
+ if f=0 & left($format,1)<>'W' then $flddef = 'space('$flddef')'
+ if $format='CSV' then $flddef = "translate("$flddef",',',' ')"
+
+ /* make data return command */
+ select
+   when $return='Q' then $retcmd = 'queue' $flddef
+   when $return='L' then $retcmd = 'say' $flddef
+   when $return='G' then $retcmd = "parse value $csin+1",
+     $flddef "with $csin csi.$csin"
+   when $return='R' then $retcmd = 'RETURN' $flddef
+   when $return='RL' then $retcmd = "$rv=$rv','"$flddef
+   when $return='T' then $retcmd = ,
+     "parse value space(dname dtype catname) with dname dtype catname .;",
+     "address ispexec 'tbadd" $table"'"
+   otherwise nop
+ end
+ $retact=word($retcmd,1)
+ if $filter<>'' then $retcmd = 'if ('$filter') then' $retcmd
+
+ if Abbrev('ALLCAT',key,4) then do /* list all catalogs */
+   parse value ,
+      CsiRexx(CsiRexx('MCN') 'fields(name vol) return(r)') 'MCAT',
+      with dname vol1 dtype   /* mastercat info */
+   interpret $retcmd
+   $catalog=dname
+   parse value '** U' with key $type
+ end
+
+ /* here follows (almost) original IGGCSIRX) */
+
+ /*-------------------------------------------------------------------
+     INITIALIZE THE PARM LIST
+ -------------------------------------------------------------------*/
+MODRSNRC = SUBSTR(' ',1,4)          /*   CLEAR MODULE/RETURN/REASON  */
+CSIFILTK = SUBSTR(KEY,1,44)         /*   MOVE FILTER KEY INTO LIST   */
+CSICATNM = SUBSTR(' ',1,44)         /*   CLEAR CATALOG NAME          */
+CSIRESNM = SUBSTR(' ',1,44)         /*   CLEAR RESUME NAME           */
+CSIDTYPS = SUBSTR(' ',1,16)         /*   CLEAR ENTRY TYPES           */
+CSICLDI  = SUBSTR('Y',1,1)          /*   INDICATE DATA AND INDEX     */
+CSIRESUM = SUBSTR(' ',1,1)          /*   CLEAR RESUME FLAG           */
+CSIS1CAT = SUBSTR(' ',1,1)          /*   INDICATE SEARCH > 1 CATALOGS*/
+CSIRESRV = SUBSTR(' ',1,1)          /*   CLEAR RESERVE CHARACTER     */
+CSINUMEN = '0001'X                  /*   INIT NUMBER OF FIELDS       */
+CSIFLD1    = SUBSTR('VOLSER',1,8)   /*   INIT FIELD 1 FOR VOLSERS    */
+/* changed assignments */
+csicatnm = left($catalog,44)        /*   set/clear catalog name      */
+csidtyps = left($type,16)           /*   set/clear entry types       */
+csis1cat = left($1cat,1)            /*   indicate search > 1 catalogs*/
+csinumen = '0002'x                  /*   init number of fields       */
+csifld1  = left('VOLSER  DSCRDT2 ',16)    /* add crestion date */
+ /*-------------------------------------------------------------------
+     BUILD THE SELECTION CRITERIA FIELDS PART OF PARAMETER LIST
+ -------------------------------------------------------------------*/
+CSIOPTS  = CSICLDI || CSIRESUM || CSIS1CAT || CSIRESRV
+CSIFIELD = CSIFILTK || CSICATNM || CSIRESNM || CSIDTYPS || CSIOPTS
+CSIFIELD = CSIFIELD || CSINUMEN || CSIFLD1
+
+ /*-------------------------------------------------------------------
+     INITIALIZE AND BUILD WORK ARE OUTPUT PART OF PARAMETER LIST
+ -------------------------------------------------------------------*/
+WORKLEN = 64000                                                /*@01C*/
+DWORK = '0000FA00'X || COPIES('00'X,WORKLEN-4)                 /*@01C*/
+
+ /*-------------------------------------------------------------------
+     INITIALIZE WORK VARIABLES
+ -------------------------------------------------------------------*/
+RESUME = 'Y'
+PREVNAME = ''                     /* NO PREVIOUS NAME            @01A*/
+CATNAMET = SUBSTR(' ',1,44)
+DNAMET = SUBSTR(' ',1,44)
+
+ /*-------------------------------------------------------------------
+     SET UP LOOP FOR RESUME (IF A RESUME IS NCESSARY)
+ -------------------------------------------------------------------*/
+DO WHILE RESUME = 'Y'
+
+ /*-------------------------------------------------------------------
+     ISSUE LINK TO CATALOG GENERIC FILTER INTERFACE
+ -------------------------------------------------------------------*/
+ ADDRESS LINKPGM 'IGGCSI00  MODRSNRC  CSIFIELD  DWORK'
+
+ RESUME = SUBSTR(CSIFIELD,150,1)    /* GET RESUME FLAG FOR NEXT LOOP */
+ USEDLEN = C2D(SUBSTR(DWORK,9,4))   /* GET AMOUNT OF WORK AREA USED  */
+ POS1=15                            /* STARTING POSITION             */
+
+ /*-------------------------------------------------------------------
+     PROCESS DATA RETURNED IN WORK AREA
+ -------------------------------------------------------------------*/
+ DO WHILE POS1 < USEDLEN            /* DO UNTIL ALL DATA IS PROCESSED*/
+   IF SUBSTR(DWORK,POS1+1,1) = '0'  /* IF CATALOG, EXTRACT CATALOG   */
+    THEN DO                         /* NAME FOR LATER PRINTING   @02C*/
+         CATNAME=SUBSTR(DWORK,POS1+2,44)
+         POS1 = POS1 + 50
+         END
+  IF POS1 < USEDLEN THEN             /* IF STILL MORE DATA       @02A*/
+   DO                                /* CONTINUE WITH NEXT ENTRY @02A*/
+    DNAME = SUBSTR(DWORK,POS1+2,44)  /* GET ENTRY NAME               */
+
+ /*-------------------------------------------------------------------
+     ASSIGN ENTRY TYPE NAME
+ -------------------------------------------------------------------*/
+   IF SUBSTR(DWORK,POS1+1,1) = 'C' THEN DTYPE = 'CLUSTER '
+    ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'D' THEN DTYPE = 'DATA    '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'I' THEN DTYPE = 'INDEX   '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'A' THEN DTYPE = 'NONVSAM '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'H' THEN DTYPE = 'GDS     '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'B' THEN DTYPE = 'GDG     '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'R' THEN DTYPE = 'PATH    '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'G' THEN DTYPE = 'AIX     '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'X' THEN DTYPE = 'ALIAS   '
+     ELSE
+      IF SUBSTR(DWORK,POS1+1,1) = 'U' THEN DTYPE = 'UCAT    '
+     ELSE
+       IF SUBSTR(DWORK,POS1+1,1) = 'L' THEN DTYPE = 'ATLLIB  ' /*@02A*/
+      ELSE                                                     /*@02A*/
+       IF SUBSTR(DWORK,POS1+1,1) = 'W' THEN DTYPE = 'ATLVOL  ' /*@02A*/
+      ELSE ,    /*  NO ENTRIES IN THE CATALOG - LOOK AT    */  /*@02A*/
+        ITERATE   /*  NEXT CATALOG NAME - GENERIC HLQ ONLY */  /*@02A*/
+ /*-------------------------------------------------------------------
+     HAVE NAME AND TYPE, GET VOLSER INFO.  IF WE FOUND A VALID TYPE
+     FOR THIS CATALOG, NOW PRINT THE CATALOG NAME (FIRST ENTRY ONLY).
+ -------------------------------------------------------------------*/
+     IF CATNAME ¬= CATNAMET THEN /* IF RESUME NAME MAY ALREADY   @02C*/
+       CATNAMET = CATNAME                                      /*@02C*/
+    POS1 = POS1 + 46
+    NUMVOL = C2D(SUBSTR(DWORK,POS1+4,2))/6 /* HOW MANY VOLSERS ?     */
+                                    /*                               */
+    POS2 = POS1+6                   /* POSITION ON DATA              */
+    pos2 = pos1+8                   /* position on data              */
+    DO I=1 TO 3                     /* ONLY CLEAR 3 VOLSER FIELDS    */
+      VOLSER.I = SUBSTR(' ',1,6)
+    END
+    DO I = 1 TO NUMVOL              /* MOVE VOLSERS TO OUTPUT FIELDS */
+      VOLSER.I = SUBSTR(DWORK,POS2,6)
+      POS2 = POS2 + 6
+    END
+
+ /*--------------------------------------------------------------------
+                       filter and build response
+ --------------------------------------------------------------------*/
+    credt = c2x(substr(dwork,pos2,3))
+    if credt='FFFFFF' then credt = '00000'
+    else credt = left(credt,5)
+    $lstn=$lstn+1
+    vol1=VOLSER.1
+    vols=space(volser.1 volser.2 volser.3)
+    if $clname & wordpos(dtype,'DATA INDEX')>0 then nop
+    else interpret $retcmd
+
+ /*-------------------------------------------------------------------
+      GET POSITION OF NEXT ENTRY
+ -------------------------------------------------------------------*/
+    POS1 = POS1 + C2D(SUBSTR(DWORK,POS1,2))
+  END                               /* OF ROOM LEFT IN WORKAREA  @02A*/
+ END
+ IF RESUME = 'Y' &,                 /* IF WE'VE TRIED THIS ENTRY @01A*/
+  PREVNAME = DNAME THEN             /* TWICE, WE'VE GOT TO QUIT  @01A*/
+   DO                                                          /*@01A*/
+     SAY STRIP(DNAME) 'CANNOT BE PROCESSED WITH THE WORK AREA SIZE ',
+         'PROVIDED - YOU MUST INCREASE THE WORK AREA AND RETRY'
+     RETURN                                                    /*@01A*/
+   END                                                         /*@01A*/
+ PREVNAME = DNAME                   /* SAVE FOR NEXT ITERATION   @01A*/
+END
+
+ /*--------------------------------------------------------------------
+                          Inserted backend
+ --------------------------------------------------------------------*/
+ if $lstn=0 & $return='L' then return xmsg('No data')+8
+ if $lstn=0 & $return='R' then return '' /* No data */
+ if $return='RL' then return substr($rv,2)
+ if $return<>'G' then return 0
+ csi.0=$csin
+ zz=RexxGblv('drop pool(CSIREXX)')
+ return RexxGblv('save var(csi.) pool(CSIREXX)')
+
+XMsg: say arg(1);return word(arg(2) 0,1)
+
+ALExpand: Procedure /* abbrev list expand verb */
+trace off
+ arg vrb,vrbl,dflt
+ if vrb='' then return dflt
+ if wordpos(vrb,vrbl)>0 then return vrb /* no need to test further*/
+ do while vrbl<>''
+   parse value strip(vrbl) with vrble vrbl
+   if Abbrev(vrble,vrb) then return vrble
+ end
+ return dflt   /* not found */
+
+Requote: if arg(1)='' then return '';else return "'"Unquote(arg(1))"'"
+Unquote: return strip(space(translate(arg(1)," ","'")))

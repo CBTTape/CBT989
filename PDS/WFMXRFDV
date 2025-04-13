@@ -1,0 +1,197 @@
+ /*                                                                    rexx
+ WFM cross-ref database and VTOC
+
+ Parameters
+  volser options
+    volser     Volser list, each volser may be a prefix.
+               ** cross-ref using all system volumes - use with care
+    LIST(l)    ALL, DB, DIF or VTOC. Default is DIF.
+    UPDATE(u)  DB    delete orphaned DB entries
+               VTOC  add VTOC entries by VTOC
+               ALL   DB+VTOC
+               note - update is subject to the LIST option.
+    TYPRUN(t)  RUN or SIM
+
+ History
+  2022-11-22  New
+  2022-11-24  Add LIST, UPDATE and TYPRUN parameters, add updater.
+  2022-11-25  Drop parm1, use VOL(list) instead.
+  2024-11-09  Fix call to WFMVOLL.
+  2024-11-18  Use WFMGSET instead of WFMRXSET, use WFMHSORP for sort.
+ */
+
+ parse source . . @me . @where .
+ if @me='ZZINSTRM' then @me='WFMXRFDV'
+ parse value '' with dsn. dsk. vtc. selopt  lastxmsg
+ parse value copies('0 ',30) with dsn# dsk# vtc# alldsn# allvol# .
+ call xmsg @me 'started','t'
+ Interpret WfmGSet()
+ sortpgm=WFMSortP() /* load sort program */
+
+ /* parm parser */
+ parse value '0 RUN DIF NO' with $msglvl $typrun $list $update $vol .
+ if arg(1)<>'' then do
+   call xmsg 'Parms:' arg(1)
+   arg p           /* upcase parms */
+   Interpret WfmParse(p,'msglvl(#) typrun(RUN SIM)',
+                        'vol(*)',
+                        'list(ALL DB DIF VTOC SUM)',
+                        'update(ALL DB VTOC NO)',
+                        ,'$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)
+ end
+ $list  =word($list   'DIF',1)
+ $update=word($update 'NO' ,1)
+ $typrun=word($typrun 'RUN',1)
+ ?sim=($typrun='SIM')
+ say 'Volser:  ' $vol
+ if $vol='' then exit xmsg(@me 'Missing VOL parameter')+8
+ $list=strip($list)
+ if $list='' then $list='DIF'
+ say 'List     ' $list
+ s=word('(WFMSET) (JCL)',$jcl+1)
+ say 'DB       ' $wfmdb'  's
+ select
+   when $list='DIF'  then $list='DV'
+   when $list='DB'   then $list='D'
+   when $list='VTOC' then $list='V'
+   when $list='SUM'  then nop
+   otherwise              $list='BDV'   /* ALL */
+ end
+ say 'Update   ' $update
+ say 'Run-type ' $typrun
+
+ parse value WfmVoll('both','vol',$vol) with cc vollist
+ if cc<>0 then call xmsg('**Volume select rc' cc vollist)+12
+say '->vollist' vollist
+
+trace off
+ gfcc=0
+ do while vollist<>'' & gfcc<5
+   parse var vollist vol vollist
+   gfcc=GoForIt(vol)
+   alldsn#=alldsn#+dsn#
+   allvol#=allvol#+1
+ end
+trace off
+
+ exit xmsg(@me 'ended,' alldsn# 'datasets processed on' allvol# 'disks','lt')
+
+ /*--------------------------------------------------------------------
+                   This is where things are done
+ --------------------------------------------------------------------*/
+
+GoForIt:
+trace off
+ drop dst. dsn.
+ dsl.=''
+ arg gfivol .
+ call xmsg 'Processing' gfivol,'lt'
+ /* 1. get database records */
+ "delstack"
+ cc=RxVsamBa('Get dd(WFMdb) text('gfivol') stack',
+             'key(0) pos('$ddbvolpos') endpos('$ddbvolpen')')
+ if cc<>0 then exit xmsg('List dsn db rc' cc+0 rxvberrm)+8
+ if queued()=0 then call xmsg 'No database records found'
+
+ /* load 2 base tables, by number and by vol+name */
+ dsn#=queued()
+ dbr#=dsn#
+ dsl.0=dsn#
+ do n=1 to dsn#
+   pull . ','.','dsn';'.
+   dsl.n=dsn
+   dsl.dsn=n
+   dst.dsn='D'
+ end
+ "delstack"
+
+ /* 2. add vtoc list names  */
+ zz=outtrap('vl.')
+ "VTOC" gfivol "LIMIT(DSO EQ PO) OR1(DSO EQ PE)",
+ "NOHEADING PRINT(NEW (DSNAME))"
+ zz=outtrap('off')
+ vl#=vl.0 -1
+ if vl#=0 then call xmsg 'No volume records found'
+ do vn=1 to vl#
+   parse var vl.vn dsn .
+   if dsl.dsn<>'' then dst.dsn='B'               /* if dsn is in database    */
+   else do                                       /* dsn is not in database   */
+     dsn#=dsn#+1
+     dsl.dsn#=dsn
+     dsl.dsn=dsn#
+     dst.dsn='V'
+   end
+ end
+ dsl.0=dsn#
+ if $list<>'SUM' then call xmsg dsn# 'names in total'
+ Call ISort 'dsl.'                               /* sort list                */
+
+ /* Report            */
+ rn=0                                            /* filter state             */
+ ?all=($list='ALL' | $list='SUM')
+ do dn=1 to dsl.0
+   dsn=dsl.dn
+   if \?all then,                                /* check state              */
+     if pos(dst.dsn,$list)=0 then iterate
+   rn=rn+1
+   rpt.rn=dsn dst.dsn
+ end
+ rpt.0=rn
+
+ drop b d v
+ t.b='Both'
+ t.d='DB'
+ t.v='VTOC'
+ parse value copies('0 ',30) with rpt.b rpt.d rpt.v  .
+ v#=0
+ d#=0
+ if $list<>'SUM' & rpt.0>0 then call xmsg left('Datasetname',44) 'State'
+ do rn=1 to rpt.0
+   parse var rpt.rn dsn st .
+   v#=v#+(st='V')
+   d#=d#+(st='D')
+   if $list<>'SUM' then call xmsg left(dsn,44) t.st
+ end
+ call xmsg gfivol 'Db only:' d# 'VTOC only:' v#
+
+ /* Update delete  ?  */
+ if $update<>'NO' & rpt.0>0 then do
+   drop d v
+   "delstack"
+   queue 'UPDDSN ('
+   do rn=1 to rpt.0
+     parse var rpt.rn dsn .
+     queue dsn gfivol
+   end
+   if queued()=1 then do
+     "delstack"
+     return xmsg('No updates')
+   end
+   queue ')'
+   call xmsg ''
+   call xmsg 'Calling updater'
+   call xmsg ''
+   cc=WfmDbUpd('sysin(stack) msglvl(1) typrun('$typrun')')
+   "delstack"
+   return xmsg('Updater ended rc' cc)+cc
+ end
+ return 0
+
+ /*-------------------------------------------------------------------
+                           Some subroutines
+ -------------------------------------------------------------------*/
+XMsg:
+ trace off
+ if arg(1)='' & lastxmsg='' then return 0
+ arg ,p2
+ if pos('L',p2)>0 & lastxmsg<>'' then say ''     /* leading text             */
+ if pos('T',p2)>0 then say time() arg(1)         /* time+text                */
+ else say arg(1)
+ lastxmsg=arg(1)
+ return 0
+
+XTSO: trace off; zz=outtrap(word(arg(2) '$.',1))
+        address tso arg(1);zz=outtrap('off');xtsorc=rc;return rc
+
+ISort: Interpret sortpgm; return 0

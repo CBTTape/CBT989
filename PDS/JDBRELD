@@ -1,0 +1,12 @@
+)CM WFM Skeleton
+
+)SET JOBPARMS = WFMDBRL,WFM-reload-dbs
+)IM WFM$JBST
+//*
+//* DB reload sample
+//*
+//DBRL     EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DS       DD DISP=SHR,DSN=&ZUSER..FINDMBR.DB.UNLOAD
+//DB       DD DISP=OLD,DSN=&$wfmdb
+ REPRO INFILE(DS) OUTFILE(DB)

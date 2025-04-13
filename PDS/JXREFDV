@@ -1,0 +1,27 @@
+)CM WFM Skeleton
+
+)SET JOBPARMS = WFMXRFDV,WFM-xref-db-vtoc
+)IM WFM$JBST
+//*
+//* WFM cross-ref database and VTOC
+//*
+//   SET     WFMLIB=&WFMLIB
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+)DEFAULT Ý&ÝÝÝÝÝ
+.*
+.*   Parameters
+.*    volser options
+.*      volser     Volser list, each volser may be a prefix.
+.*                 ** cross-ref using all system volumes - use with care
+.*      LIST(l)    ALL, DB, DIF or VTOC. Default is DIF.
+.*      UPDATE(u)  DB    delete orphaned DB entries
+.*                 VTOC  add VTOC entries by VTOC
+.*                 ALL   DB+VTOC
+.*                 NO    Do not do updates - default.
+.*                 note - update is subject to the LIST option.
+.*      TYPRUN(t)  RUN or SIM
+.*
+//GO       EXEC WFMPROC,PG=WFMXRFDV,
+//         PM='typrun(sim) vol(**) list(dif) update(all) msglvl(1)'
+//*        PM='CBT list(dif) update(all  )'

@@ -1,0 +1,35 @@
+)CM List db entries
+
+)SET JOBPARMS = WFMDBLST,Findmbr-DB-List
+)IM WFM$JBST
+//*
+//* List db entries
+//*
+//   SET     WFMLIB=&wfmlib
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+//*
+.* Parameters
+)CM SYSIN(s)          ;Libref or STACK. Default is SYSIN
+.*  MSGLVL(n)         ;Gt 0 for more messages
+)CM TYPRUN(RUN || SIM)  Run mode
+//DBL      EXEC WFMPROC,PG=WFMDBLST,PM='MSGLVL(1)'
+//SYSIN    DD   *
+.* Use the MD line command to turn a noteline into a text line.
+.* Semi-colon means end of command / start of comment.
+.*
+.* DSN name ÝMBRS¨    ;List datasets, optionally with members.
+.*                     The MBRS option must scan the entire db.
+.* DSNKEY             ;List datasets by datasetkey
+.* MBR name           ;List members
+.* MBRKEY key ÝDSN¨   ;List members by dataset key, 'DSN' will show
+.*                     dsname and volser.
+.* VOL volser         ;List datasetnames by disk.
+.* VOLList q          ;Where q is one of the following:
+.*                      ALL   combined list
+.*                      SYS   online dasd list
+.*                      DB    list of volser in database
+.*                      DBO   list of volser in database only
+.*                      SYSO  online dasd list where no db entries
+.*  All name, key and volser values may be a mask.
+//*

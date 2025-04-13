@@ -1,0 +1,144 @@
+/*                                                                rexx
+                       Volume synchronization
+ Synchronoze volsers
+  - delete records when no actual volume
+  - add records when when not in db
+
+ Parameters
+  MSGLVL(n)   The higher number, the more messages
+  TYPRUN(t)   RUN do execute, SIM show generated commands
+  ACTION(a)   ADD - add volumes in system but not in db.
+              DEL - delete volumes in db but not in system
+              UPD - will do update for volumes in both
+              system and db.
+              ALL - all of the above.
+  Default is MSGLVL(0) TYPRUN(SIM) ACTION(ALL)
+  Volume selection is controlled by the VOLSEL DD.
+
+ History
+  2024-07-24  Add UPD option.
+
+*/
+
+ parse source sys @what @me ddn @where .
+ Interpret WfmGSet()                 /* set some globals */
+ say 'WFM version' wfmver wfmbdate
+
+ parse value copies('0 ',20) with prc $rc cmdn deln addn updn .
+ parse value '' with simtxt
+
+ Call Xmsg @me 'Volume synchronization started'
+
+ parse value '0 SIM ALL' with $msglvl $typrun $action .
+ if arg(1)<>'' then do
+   say 'Parameters:' arg(1)
+   Interpret WfmParse(translate(arg(1)),,
+     'msglvl(#) typrun(RUN SIM) action(ALL ADD DEL UPD NONE)','$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)+8
+ end
+ if $action='NONE' then $typrun='SIM'
+ say '  Action   ' $action
+ say '  Msglvl   ' $msglvl
+ say '  Typrun   ' $typrun
+ if $typrun='SIM' then simtxt='(SIM) '
+
+ if $WFMDSN='' then exit xmsg('Dataset db not allocated ('cc')',8)
+ if $typrun='RUN' then do
+   if $WFMMBR='' then exit xmsg('Member db not allocated ('cc')',8)
+ end
+
+ /*--------------------------------------------------------------------
+                      List vols with status
+ --------------------------------------------------------------------*/
+ parse value WfmVoll('both',,'='),               /* get online and in db     */
+   with cc vlist
+ if cc>0 then exit xmsg(vlist)+8
+ say ''
+ drop b d s
+ vst.b='Both'
+ vst.s='System'
+ vst.d='Database'
+ vln=words(vlist)
+ if $msglvl>0 then do
+   call xmsg 'Listing' vln/2 'volumes'
+   do n=1 to vln by 2
+     s=word(vlist,n+1)
+     say '  'word(vlist,n)'  'vst.s
+   end
+   say ''
+ end
+
+ /*--------------------------------------------------------------------
+                       Generate 'delvol' list
+ --------------------------------------------------------------------*/
+ if wordpos($action,'ALL DEL')>0 then do
+   do n=1 to vln by 2
+     vol=word(vlist,n)
+     st =word(vlist,n+1)
+     if st='D' then,
+       parse value deln+1 cmdn+1 ' DELVOL' vol with deln cmdn cmdl.cmdn
+   end
+   if deln=0 then call xmsg 'No obsolete db volumes'
+   else call xmsg right(deln,5) 'delvol records generated'
+ end
+
+ /*--------------------------------------------------------------------
+                       Generate 'addvol' list
+ --------------------------------------------------------------------*/
+ if wordpos($action,'ALL ADD')>0 then do
+   do n=1 to vln by 2
+     vol=word(vlist,n)
+     st =word(vlist,n+1)
+     if st='S' then,
+       parse value addn+1 cmdn+1 ' ADDVOL' vol with addn cmdn cmdl.cmdn
+   end
+   if addn=0 then call xmsg 'No undefined system volumes'
+   else call xmsg right(addn,5) 'addvol records generated'
+ end
+
+ /*--------------------------------------------------------------------
+                       Generate 'updvol' list
+ --------------------------------------------------------------------*/
+ if wordpos($action,'ALL UPD')>0 then do
+   do n=1 to vln by 2
+     vol=word(vlist,n)
+     st =word(vlist,n+1)
+     if st='B' then,
+       parse value updn+1 cmdn+1 ' UPDVOL' vol with updn cmdn cmdl.cmdn
+   end
+   if updn=0 then call xmsg 'No db+system volumes'
+   else call xmsg right(updn,5) 'updvol records generated'
+ end
+
+ /*--------------------------------------------------------------------
+                just list commands in simulate
+ --------------------------------------------------------------------*/
+ if $typrun='SIM' | $msglvl>1 then do
+   zz=xmsg()+xmsg('Generated commands')
+   do n=1 to cmdn
+     say cmdl.n
+   end
+ end
+
+ /*--------------------------------------------------------------------
+                     Run commands
+ --------------------------------------------------------------------*/
+ if $typrun='RUN' then do
+   zz=xmsg()+xmsg('Run generated commands')+xmsg()
+   "delstack"
+   do n=1 to cmdn
+     queue cmdl.n
+   end
+   cc=WfmDbUpd('sysin(stack) msglvl('$msglvl')')
+   if cc<>0 then exit xmsg(@me 'Updater error' cc)+8
+ end
+
+ /*--------------------------------------------------------------------
+                                End
+ --------------------------------------------------------------------*/
+ Exit Xmsg()+Xmsg(@me 'Volume synchronization ended')
+
+ /*--------------------------------------------------------------------
+                          Some subroutines
+ --------------------------------------------------------------------*/
+XMsg: say arg(1);return word(arg(2) 0,1)

@@ -1,0 +1,71 @@
+)CM WFM Skeleton to build the settings lib
+)SET JOBPARMS = WFMMKSET,Findmbr-make-setlib
+)IM WFM$JBST
+//*
+)CM //         SET     WFMLIB=&WFMLIB
+)CM //         JCLLIB  ORDER=&WFMLIB
+)CM //         INCLUDE MEMBER=WFMSET
+)CM //         SET     WFMLOAD=SYS1.LINKLIB
+//*
+//U1       EXEC PGM=IEBUPDTE,PARM=NEW
+//SYSPRINT DD SYSOUT=*
+.*   Note that if you change the dsntype to an ordinary library then you
+.*   must also do regular compress.
+//SYSUT2   DD DISP=(,CATLG),DSN=&$WFMSETL,
+//            UNIT=3390,VOL=SER=&WFMDSV,DSNTYPE=LIBRARY,
+//            RECFM=FB,LRECL=80,SPACE=(TRK,(2,1,1))
+)CM SIN    DD DATA,DLM=@@
+//SYSIN    DD *
+.*   Generate member for volume selection
+./ ADD NAME=VOLSEL
+*
+*  Enter volsers in order of most specific to least specifc, i.e.
+*    SYSAS2 SYSC.
+*  Wildcards are supported.
+*  Not case sensitive.
+*  Empty list is allowed.
+*
+*  INCLUDE(
+*   incvl1
+*   *vs1
+*  )
+EXCLUDE(
+ ZZSA01
+ JCK*
+ JSP*
+ ZFS*
+ WRK*
+ WORK*
+)
+.*   Generate member for SMF logstream
+)REXX SMFMED SMFNAME
+/*
+ variables returned from SDSF SMFO command:
+   OPTION.1    = LOGSTREAM or DATASET
+   LOGSTREAM.1 = IFASMF.VS01.DATA
+*/
+ call isfcalls 'ON'
+ address SDSF "ISFEXEC SMFO"
+ smfmed=option.1
+ smfname='log-stream-name'
+ if smfmed='LOGSTREAM' then smfname=logstream.1
+)ENDREXX
+./ ADD NAME=WFMSMFSL
+ LSNAME(&smfname,OPTIONS(DUMP))
+ OUTDD(OUTDD1,TYPE(15,17,18,61))
+.*   Generate member for date checking
+)REXX LDP
+ /* generate lastrun date as day before yesterday like 2019-04-17 */
+ ld = date('b')-2
+ ld = date('s',ld,'b')
+ ldp = Insert('-',Insert('-',ld,6),4)
+)ENDREXX
+./ ADD NAME=LASTDATE
+&ldp
+.*   Generate general settings member
+./ ADD NAME=WFMSET
+//         DD DISP=SHR,DSN=&WFMLIB.(WFMSET)
+//         DD *
+.*   Generate JCL job statement parameters
+./ ADD NAME=WFM$JBPM
+//         DD DISP=SHR,DSN=&WFMLIB.(WFM$JBPM)

@@ -1,0 +1,117 @@
+/*                                                               rexx
+
+ String parser
+
+ Parameters
+  string     String consisting of multiples of verb(data)
+              and/or verb alone.
+              Imbedded paranthesis and quotes in data are
+              supported.
+  model-line  Defines valid verbs and data formats. Optional.
+              String consists of multiples of verb(data)
+              and/or verb alone where data is
+                #     data must be a number
+                list  data must be one of the words in list
+                *     data can be anything
+  prefix      Prefix for generated variables. Optional.
+  default     Default for verb alone, default is 'Y'.
+
+ Returns
+  text        Set vars, i.e. ;verb1='data1';..;verbn='datan'
+              special variable ERR is set in case of error.
+
+ Sample
+  str=' test typrun(run )  msglvl(8)'
+  mdl='MSGLVL(#) TYPRUN(RUN SIM) NAME(*) test TRACE'
+  interpret Parse2(str,mdl,'P.',1)
+  if err<>'' then exit xmsg('Parser error' err)
+
+ History
+  2022-11-03  Init
+  2022-11-04  Enhance processing of quoted strings.
+
+*/
+
+ parse arg str,mdl,pfx,dfc
+ mdl=' 'translate(mdl)
+ dfc=word(dfc 'Y',1)
+ rtn="err=''"
+ l1=length(space(str,0))
+ l2=length(space(translate(str,' ',"'"),0))
+ if (l1-l2)//2<>0 then return "err='unequal quotes'"
+ str=translate(str,'10'x,"'")  /* allow for quotes */
+ Return translate(XParse2Sub1(),"'()",'101112'x)
+
+XParse2Sub1:
+
+ /* format string to allow for imbedded paranthesis */
+ n=0         /* paranthesis level    */
+ p=0         /* string position      */
+ q=0         /* in quoted substring  */
+ do forever
+   p=Verify(str,"()"||'10'x,'m',p+1)
+   if p=0 then leave
+   if substr(str,p,1)='(' then do
+     if q then str=overlay('11'x,str,p)
+     else do
+       if n>0 then str=overlay('11'x,str,p)
+       n=n+1
+     end
+   end
+   else if substr(str,p,1)=')' then do
+     if q then str=overlay('12'x,str,p)
+     else do
+       n=n-1
+       if n<0 then return "err='missing left paranthesis'"
+       if n>0 then str=overlay('12'x,str,p)
+     end
+   end
+   else q=word('1 0',q+1)  /* must be quote - swap 0 and 1 */
+ end
+ if n>0 then return "err='missing right paranthesis'"
+
+ /* parse string      */
+ do main=1 to 999999 while str<>''
+   str=strip(str)' '
+   p  =Verify(str,' (','m')
+
+   /* verb only */
+   if substr(str' ',p,1)=' ' then do
+     parse var str vrb str
+     if mdl<>'' then,
+     if wordpos(translate(vrb),mdl)=0 then,
+       return Parse2err('Bad verb:' vrb)
+     rtn=rtn";"pfx||vrb"='"dfc"'"
+     iterate main
+   end
+
+   /* enclosed value */
+   parse var str vrb . '(' txt ')' str
+   if vrb='' then return Parse2err('Missing verb before (' txt)
+   if mdl<>'' then,
+   if pos(' 'translate(vrb)'(',mdl)=0 then,
+     return Parse2err('Bad keyword:' vrb'(')
+   txt=strip(txt)
+   if mdl<>'' then,
+   if txt<>'' then do                 /* check value */
+     chk=' 'translate(vrb)'('
+     parse var mdl (chk) chk ')'
+     select
+       when chk='*' then nop
+       when chk='#' then do
+         if datatype(txt)<>'NUM' then,
+           return Parse2err('Bad number for verb:' vrb)
+       end
+       otherwise do
+         chk=translate(chk,' ','+')
+         if wordpos(translate(txt),chk)=0 then,
+           return Parse2err('Bad data for verb:' vrb)
+       end
+     end
+   end
+   rtn=rtn";"pfx||vrb"='"strip(txt,'b','10'x)"'"
+ end
+
+ Return rtn /*translate(rtn,'()','1112'x) */
+
+Parse2err: return rtn";err='"arg(1)"'"

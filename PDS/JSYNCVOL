@@ -1,0 +1,51 @@
+)CM WFM Skeleton
+
+)SET JOBPARMS = WFMSYNCV,Findmbr-sync-vols
+)IM WFM$JBST
+//*
+//* Run volume sync
+//*
+//   SET     WFMLIB=&WFMLIB
+)IM  WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+)DEFAULT Ý&ÝÝÝÝÝ
+.*
+.* Synchronize volsers
+.*   - delete records when no actual volume
+.*   - add records when when not in db
+.*   It is highly recommended that you do a TYPRUN(SIM) to verify
+.*   the finally action. Use the VOLSER DD to exclude volumes from
+.*   processing.
+.*
+.* Parameters
+.*   MSGLVL(n)   The higher number, the more messages
+.*   TYPRUN(t)   RUN do execute, SIM show generated commands
+.*   ACTION(a)   ADD - add volumes in system but not in db.
+.*               DEL - delete volumes in db but not in system.
+.*               UPD - will do update for volumes in both
+.*                     system and db.
+.*               ALL - all of the above
+.*   Default is MSGLVL(0) TYPRUN(SIM) ACTION(ALL)
+.*   Volume selection is controlled by the VOLSEL DD.
+.*
+.* You probably should run job 'JDBDDUP Delete duplicate records'
+.* afterwards.
+.*
+//SYNCV    EXEC WFMPROC,PG=WFMSYNCV,
+//             PM='MSGLVL(0) TYPRUN(SIM) ACTION(ALL)'
+//*            PM='MSGLVL(0) TYPRUN(RUN) ACTION(ADD)'
+//
+//* For VOLSEL use either
+//VOLSEL   DD DISP=SHR,DSN=&$WFMSETL.(VOLSEL) in/exclude list
+//* or this
+//VOLSEL   DD * volser or volser prefix
+ INCLUDE(
+  volser
+   . .
+  volser
+ )
+ EXCLUDE(
+  volser
+   . .
+  volser
+ )

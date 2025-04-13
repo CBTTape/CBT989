@@ -1,0 +1,51 @@
+/*                                                                    rexx
+  Build string with set-variable for other REXX pgms
+  Usage : Interpret WfmRxSet()
+
+ Dataset db layouts
+  1       10        20        30        40        50
+  K---+----+-K--+----+----+----+----+----+----+----+----+--
+  756219333556 SYSAS1 SYSA.AXR.EXEC PO VB 255 27998 Y  source
+  756219333566 Z27RS6 APS460.SAUPLOAD PO U 0 32760 Y   loadlib
+
+ Member db layouts
+  1       10        20        30        40        50        60        70
+  K---+----+----+----K----+----+----+----+----+----+----+----+----+----+
+  APKJALOCZ27RS6...è..DWPRAY;17/10/19;17/10/1916:45;01.02;0;190;190;;; source
+  APSGCDR\Z27RS6...è..;18/01/25;;;;5248;;;RANY,A31,RENT,REUS;          loadlib
+
+*/
+ arg p
+ parse var p . 'PFX('pfx')' .
+
+ Return,
+ pfx"wfmver='010.20';",
+ pfx"wfmbdate='2024-07-26';",
+ pfx"ddbkeypos=1;",                  /* dsn db key position          */
+ pfx"ddbkeylen=12;",                 /*    -   key length            */
+ pfx"ddbkeypen=1+12-1;",             /*    -   key length            */
+ pfx"ddbvolpos=14;",                 /*    -   volser pos in record  */
+ pfx"ddbvollen=6;",                  /*    -   volser len in record  */
+ pfx"ddbvolpen=14+6-1;",             /*    -   volser endpos         */
+ pfx"ddbdsnpos=21;",                 /*    -   dsname pos in record  */
+ pfx"ddbdsnlen=44;",                 /*    -   dsname len (max)      */
+ pfx"ddbdsnpen=21+44-1;",            /*    -   dsname endpos (max)   */
+ pfx"ddbkeydt=7;",                   /*    -   date/time pos ink ey  */
+ pfx"mdbkeypos=1;",                  /* member db key position       */
+ pfx"mdbkeylen=20;",                 /* member db key length         */
+ pfx"mdbnamepos=1;",                 /* member db name position      */
+ pfx"mdbnamelen=8;",                 /* member db name length        */
+ pfx"mdbnamepen=1+8-1;",             /* member db name endpos        */
+ pfx"mdbdkeypos=9;",                 /*    -   dsn key pos in record */
+ pfx"mdbdkeylen=12;",                /*    -   dsn key len in record */
+ pfx"mdbdkeypen=9+12-1;",            /*    -   dsn key endpos        */
+ pfx"dbdparse='dsnkey dsnvol dsnname",
+              "dsndsorg dsnrecfm dsnlrecl dsnblksz dsncat dsnmbrn';",
+ pfx"dbdv11parse='dsnkey +12 . +8 dsnvol dsnname",
+              "dsndsorg dsnrecfm dsnlrecl dsnblksz dsncat dsnmbrn';",
+ pfx"dbmparse='mbrname +8 mbrdkey +12 mbruser'';''",
+              "mbrcredt'';''mbrmoddt'';''mbrver'';''mbrmod'';''",
+              "mbrsize'';''mbrinit'';''mbrssi'';''mbrattr'';''mbralof';",
+ pfx"dbdcdif="date('b','20200101','s')-date('b','20000101','s')";",
+ "$wfmpdsm='PDSMAIN';",
+ ""

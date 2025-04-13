@@ -1,0 +1,107 @@
+)CM Create single v012 db from v010 dsn+mbr dbs
+
+)SET JOBPARMS = WFMCV0DB,Findmbr-DB-ConvTo1
+)IM WFM$JBST
+//*
+//* Create single v012 db from v010 dsn+mbr dbs
+//* Verify/edit the new database name.
+//* Check output from the DBSTAT step, adjust space def and
+//* rerun the job if the new DB is vastly overallocated.
+//* !! Remember to update the WFMSET member afterwards !!
+//*
+//    SET WFMLIB=&$wfmlib
+//    JCLLIB ORDER=(&WFMLIB)
+//    SET WFMLOAD=SYS1.LINKLIB
+
+)SET DBVOL = &$WFMDBV
+)REXX PSPC SSPC DBCVDSN DBCVMBR DBCVNEW DBVOL
+ if datatype(pspc)<>'NUM' then pspc=100
+ sspc=pspc%10                    /* 10 pct slack */
+ pspc=pspc+sspc
+ if sspc=0 then sspc=sspc+1      /* ensure at least 1 cyl */
+)ENDREXX
+
+//*-
+//* Create new db, then copy member records
+//*-
+)CM do not create another jobstatement
+)SET  JDBCR$NJ = Y
+)IM JDBCR$
+//*-
+//* Copy member records
+//*-
+//MBRCOPY  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//MBRDB    DD DISP=SHR,DSN=&DBCVMBR
+//WFMDB    DD DISP=SHR,DSN=&DBCVNEW
+ REPRO INFILE(MBRDB) OUTFILE(WFMDB)
+//*-
+//* Unload dataset records
+//*-
+//DSNUNLD  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//DSNDB    DD DISP=SHR,DSN=&DBCVDSN
+//DSNUNLD  DD DISP=(,PASS),DSN=&&&&DSNDB,
+//            UNIT=3390,RECFM=VB,LRECL=100,BLKSIZE=0,
+//            SPACE=(CYL,(2,2))
+ REPRO INFILE(DSNDB) OUTFILE(DSNUNLD)
+//*-
+//* Reformat dataset records
+//*-
+//REFMT    EXEC WFMRXINS
+//DSNDATAI DD DISP=OLD,DSN=&&&&DSNDB
+//DSNDATAO DD DISP=(,PASS),DSN=&&&&DSNDATAO,
+//            UNIT=3390,RECFM=VB,LRECL=100,BLKSIZE=0,
+//            SPACE=(CYL,(2,2))
+//REXX     DD *
+ /*
+ dsname record layout
+ v010   dsnkey volser dsname ..rest..
+  i.e.  178615250705 SYSCS1 SYSC.CBT.ISPMLIB PE FB 80 27920 Y 1
+)CM  V011   0||||dsnkey||||'*******'||||dsnvol,dsnname';'...rest...
+)CM   i.e.  0177308193172*******SYSCU1A.CBT417.SKELS;PE;FB;80;27920;Y;19;
+ V012   0||||dsnkey,dsnvol,dsnname';'...rest...
+  i.e.  0177308193172,SYSCU1,A.CBT417.SKELS;PE;FB;80;27920;Y;19;
+ */
+ address tso
+ tn=0
+ bn=200
+ say 'Dataset record reformat started...'
+ do until rn<<bn
+   "execio" bn "diskr dsndatai"
+    rn=queued()
+    tn=tn+rn
+    do rn
+      parse pull key vol rest
+      if left(key,8)='00000000' then iterate      /* old dsn seed */
+      if substr(key,9,8)='00000000' then iterate  /* old mbr seed */
+      queue '0'key','left(vol,6)','translate(rest,';',' ')
+    end
+   "execio" queued() "diskw dsndatao"
+ end
+ say 'Dataset record reformat ended,' tn 'records processed.'
+ "execio 0 diskr dsndatai (finis)"
+ "execio 0 diskw dsndatao (finis)"
+//*-
+//* Load dataset records
+//*-
+//DSNLOAD  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//LIST     DD SYSOUT=*
+//DSNDATA  DD DISP=OLD,DSN=&&&&DSNDATAO
+//DB       DD DISP=SHR,DSN=&DBCVNEW
+//SYSIN    DD *
+ REPRO INFILE(DSNDATA) OUTFILE(DB)
+//*-
+//* Stats for new db
+//*-
+//DBSTAT   EXEC WFMRXINS
+ /* Show basic stats for new DB */
+ db='&dbcvnew'
+ r=WfmVsInf(db,'data.space_pri data.usepct data.volser')
+ parse var r pspc pct'.'. dbvol .
+ say 'DBname         ' db
+ say 'Allocated space' right(pspc,5) 'cyls'
+ say 'Use pct        ' right(pct,5)
+ say 'Used space     ' right(pspc*pct%100,5) 'cyls'
+//*

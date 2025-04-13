@@ -1,0 +1,126 @@
+/*                                                         rexx
+
+ WFMGSET v012 - Load all settings
+
+ History - this member
+  2024-11-18  Fix WFMSET member locate
+
+ See the WFMHIST member for a list of all changes.
+*/
+
+ wfmver  ='012.16'
+ wfmbdate='2024-12-09'
+ parse value 'WFMGSET 0   $    WFMDB ',
+        with @me      $rc pfx  wfmdd $wfmdb .
+ gset =0GSet()
+ Interpret gset
+ if $rc<>0 then return "$rc="$rc
+
+ /* JCL allocation for DDname WFMDB overrides WFMSET */
+ if BpxWdyn('info dd(wfmdb) inrtdsn(cdbn)')=0 then,
+   return "$rc=0;$jcl=1;" gset";"xset()";",
+       || "$wfmdd='WFMDB';$wfmdb='"cdbn"';"
+
+ /* use settings in WFMSET to set variables */
+ Return "$RC="$rc";$jcl=0;",
+     || "$wfmdd='WFMDB';$wfmdb='"$wfmdb"';",
+     || gset";"xset()";"
+
+Upcase1: return bitor(Lowcase(arg(1)),'40'x)
+LowCase: return translate(arg(1),xrange('a','z'),xrange('A','Z'))
+XMsg: say @me arg(1);return 0
+
+/*
+ Build string with set-variable, was external pgm WFMRXSET
+
+  Dataset section layout
+  1        10        20        30        40        50
+  K---+----+----+----K----+----+----+----+----+----+----+--
+                                                                   source
+  0174712325309,Z27RES,ADCD.Z27.PROCLIB;PO;FB;80;9040;Y;198;
+  0174713544678,SYSAU1,WJ.TEST.PARMLIB;PO;FB;80;27920;Y;10;        loadlib
+
+  Member section layout
+  1        10        20        30        40        50
+  K---+----+----+----K----+----+----+----+----+----+----+--
+  ACCESSDS174713530534WJ;18/01/13;21/02/2511:42;01.03;0;57;53;;;   source
+  AFBVTEN\174712413574;19/05/07;;;;912;;;RANY,A31,RENT,REUS,REFR;  loadlib
+*/
+Xset:
+ xsetr=,
+ "$wfmver='"wfmver"';",
+ "$wfmbdate='"wfmbdate"';",
+ "$ddbkeypos=1;",                    /* dsn db key position          */
+ "$ddbmbkpos=2;",                    /*    -   member key position   */
+ "$ddbmbklen=12;",                   /*    -   member key length     */
+ "$ddbmbkpen="2+12-1";",             /*    -   member key endpos     */
+ "$ddbdsnlen=44;",                   /*    -   dsname len (max)      */
+ "$ddbkeydt=7;",                     /*    -   date/time pos in key  */
+ "$ddbdlm=';';",                     /*    -   delimiter             */
+ "$ddbkeylen=20;",                   /*    -   key length            */
+ "$ddbkeypen=20;",                   /*    -   key end pos           */
+ "$ddbkeypfx='0';",                  /*    -   key prefix            */
+ "$ddbvsbkey='key(0)';",             /*    -   key for vsamba        */
+ "$ddbvolpos=15;",                   /*    -   volser pos in record  */
+ "$ddbvollen=6;",                    /*    -   volser len in record  */
+ "$ddbvolpen="15+6-1";",             /*    -   volser endpos         */
+ "$ddbdsnpos=22;",                   /*    -   dsname pos in record  */
+ "$ddbdsnpen="22+44-1";",            /*    -   dsname endpos (max)   */
+ "$dbdparse='=2 dsnkey +12 . +1 dsnvol +6 . +1 dsnname'';''",
+         || "dsndsorg'';''dsnrecfm'';''dsnlrecl'';''dsnblksz'';''",
+         || "dsncat'';''dsnmbrn'';''';",
+ "$dbdmap='''0''dsnkey'',''dsnvol'',''dsnname'';''",
+         || "dsndsorg'';''dsnrecfm'';''dsnlrecl'';''dsnblksz'';''",
+         || "dsncat'';''dsnmbrn'';''';",
+ "$mdbkeypos=1;",                    /* member db key position       */
+ "$mdbkeylen=20;",                   /* member db key length         */
+ "$mdbnamepos=1;",                   /* member db name position      */
+ "$mdbnamelen=8;",                   /* member db name length        */
+ "$mdbnamepen=1+8-1;",               /* member db name endpos        */
+ "$mdbdkeypos=9;",                   /*    -   dsn key pos in record */
+ "$mdbdkeylen=12;",                  /*    -   dsn key len in record */
+ "$mdbdkeypen=9+12-1;",              /*    -   dsn key endpos        */
+ "$dbmparse='mbrname +8 mbrdkey +12 mbruser'';''",
+              "mbrcredt'';''mbrmoddt'';''mbrver'';''mbrmod'';''",
+              "mbrsize'';''mbrinit'';''mbrssi'';''mbrattr'';''mbralof';",
+ "$dbdcdif="date('b','20200101','s')-date('b','20000101','s')";",
+ "$wfmpdsm='PDSMAIN';",
+ ""
+ return xsetr
+
+/* Read member WFMSET, return as REXX variables
+   The member will be searched for in librefs WFMSETLB and
+   WFMLIB in that order.
+*/
+0Gset: Procedure
+ @me='WFMGSET_GSET'
+ parse value 'WFMSETLB WFMLIB;' with ddl';'dlib
+ do while ddl<>'' & dlib=''
+   parse var ddl dd ddl
+   if BpxWdyn('info dd('dd') inrtdsn(ds)')<>0 then iterate
+   if Sysdsn("'"ds"(WFMSET)'")='OK' then dlib=ds
+ end
+ if dlib='' then do
+   m='WFMSET member not found where expected'
+   call xmsg m
+   exit "$RC="xmsg('WFMSET member not found where expected')+8
+ end
+ mdef=dlib'(WFMSET)'
+
+ cc=Bpxwdyn('alloc da('mdef') shr rtddn(dd1)')
+ if cc<>0 then exit "$RC="xmsg('Alloc' mdef 'failed rc' cc)+8
+ "execio * diskr" dd1 "(stem @set. finis)"
+ cc=rc
+ zz=Bpxwdyn('free dd('dd1')')
+ if cc<>0 then exit "$RC="xmsg('Read' mdef 'failed rc' cc)
+
+ @rsp="$WFMDALU='3390';$WFMISORT='REXXVARS'"
+ do @setn=1 to @set.0
+   r=@set.@setn
+   if left(r,3)<>'// ' | pos(' SET ',r)=0 then iterate
+   parse var r . . name'='val .
+   name=strip(name)
+   if val="''" then @rsp=@rsp";$"||name"="val
+   else             @rsp=@rsp";$"||name"='"val"'"
+ end
+ return "$RC=0;"@rsp

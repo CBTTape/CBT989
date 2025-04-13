@@ -1,0 +1,867 @@
+/*                                                                    rexx
+ WFM DB Update
+  - add ddsname
+  - update dsname - combination of ADDDSN and DELDSN
+  - delete records by either dsname, volset, member or key
+  - add volume(s)
+
+ Parameters
+  MSGLVL(n)            1 shows more messages i.e. dsn db updates
+                       2 also show mbr db updates
+  TYPRUN(t)            SIM or RUN
+  SYSIN(s)             Libref or STACK. Default is SYSIN
+
+ Sysin
+  ADDDSN dsname Ývolser¨   add dataset, optionally by volser
+  ADDDSN dsname-mask       add datasets by mask, volser is from
+                           catalog search. *note* no check for
+                           duplicate name
+  DELDSN dsname Ývolser¨   delete dataset, optionally by volser
+  UPDDSN dsname Ývolser¨   update dataset, optionally by volser
+  DELDKY key               delete dataset records with key.
+  DELMKY key               delete member records with key.
+  DELKEY key               delete both dataset- and member records
+                           with key.
+  DELTXT pos value         delete for text starting in pos 'pos'.
+  ADDVOL vollist | =       Add pds/pdse from named disk. vollist may a
+                           list of descrete volser, volser prefix or
+                           mask, or a mixture thereof. '=' means use
+                           the VOLSEL libref - see the procedure.
+  DELVOL vollist | =       Delete volser(s). See the vollist
+                           description under ADDVOL.
+  UPDVOL vollist | =       combined DELVOL + ADDVOL. See the vollist
+                           description under ADDVOL.
+
+ Princple of operation
+  Apply all deletes then apply adds
+
+ History
+  2022-10-24  New
+  2022-11-01  volser may be *
+  2022-11-04  handle missing volser for ADDDSN
+  2022-11-06  add LIST cmd
+  2022-11-13  handle volser '******' (iplvol)
+  2022-11-18  new internal SetRc, set rc when PDSMAIN error instead of exit
+  2022-11-22  better handling of SIM in AddPdsData
+  2024-06-17  use stem when adding to dsndb
+  2024-07-09  add DELMBK
+  2024-07-22  change msg text for ADDDSN
+  2024-00-01  fix ADDVOL * not using the VOLSEL libref.
+  2024-08-03  show PDSMAIN list if rc>4
+  2024-08-04  new command TSO xxxx
+  2024-08-20  enhance DELDSN list
+  2024-10-11  allow pattern in ADDVOL volume selection
+  2024-10-12  ADDDSN test for temp dsn, ADDDSN, DELDSN and UPDDSN
+              using mask.
+  2024-10-14  ADDDSN test for volume is online.
+  2024-10-16  ADDVOL fix bad test for '*'
+  2024-11-09  Some rewrites, use new WFMVOLL.
+  2024-11-17  Major rewrite, delete the batched process etc.
+  2024-11-21  Add DELKEY and DELTXT commands.
+  2024-11-23  Show deleted datasets for msglvl > 0
+*/
+
+ parse source sys @what @me ddn @where .
+ parse value copies('0 ',30) with $rc dsnal.0 mbral.0 ?vol.,
+       ?adddsn #adddsn #addmbr ?deldsn #deldsn ?delmbr #delmbr,
+       #delkey #errdsn dsck. dsckn .
+ parse value '' with lastxmsg
+
+ signal on syntax  name PgmSyntax
+ Signal on novalue name PgmNoVal
+
+ Sortpgm=WfmSortP()
+ Interpret WfmGSet()                          /* Get some globals     */
+ CVT      = C2d(Storage(10,4))                /* point to CVT         */
+ JESCT    = C2d(Storage(D2x(CVT + 296),4))    /* point to JESCT       */
+ RESUCB   = C2d(Storage(D2x(JESCT + 4),4))    /* point to SYSRES UCB  */
+ IPLVOL   = Storage(D2x(RESUCB + 28),6)       /* point to IPL volume  */
+ zz=xmsg(@me 'WFM version' $wfmver $wfmbdate)
+ zz=xmsg(@me 'DB maintenance started' time())+xmsg()
+
+ /* parm parser */
+ parse value '0 RUN SYSIN' with $msglvl $typrun $sysin .
+ if arg(1)<>'' then do
+   arg p    /* upcase parms */
+   call xmsg 'Parms:' p
+   Interpret WfmParse(p,'msglvl(#) typrun(run sim) sysin(*)','$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)
+ end
+ ?sim=($typrun='SIM')
+ if $typrun='SIM' & $msglvl=0 then $msglvl=1
+ if $sysin<>'STACK' then do
+   call xmsg '  Runtype ' $typrun
+   call xmsg '  Msglvl  ' $msglvl
+   call xmsg '  Sysin   ' $sysin
+   call xmsg '  Pdsmain ' $wfmpdsm     /* from WfmRxSet    */
+ end
+ call xmsg '  Database' $wfmdb
+ if wordpos($typrun,'SIM RUN')=0 then exit xmsg('Invalid typrun',8)
+ if datatype($msglvl)<>'NUM' then exit xmsg('Invalid msglvl',8)
+ if $wfmdb ='' then exit xmsg('Dataset db not allocated',8)
+ simtxt=''
+ if $typrun='SIM' then simtxt='(SIM) '
+
+ /* Ensure correct evel of RXVSAMBA (text=RXVSAMBA.031.2 202...)*/
+ parse value RxVsamBa('VERSION') with .'.'v'.'.
+ if v<031 then call close 'RXVSAMBA build' v 'is too low',16
+
+ /* Ensure msgid is set */
+ call xtso "profile"
+ $msgid = word('N Y',(wordpos('MSGID',$.1)>0)+1)
+ if $msgid='N' then do
+   call xtso 'profile msgid'
+   if $msglvl>0 then call xmsg 'Profile MSGID set'
+ end
+
+ /* make state list for all dasd  */
+ cc=RXUCBSCN('*','ucbvol.')
+ if cc<>0 then exit xmsg('UBS scan bad rc' cc)
+ do n=1 to ucbvol.0
+   parse var ucbvol.n d v s .
+   ?vol.v=1
+   ucbvol.n=v                /* replace with volser only */
+ end
+ c='*'
+ ?vol.c=1
+
+ /* Get control data */
+ cn=0
+ if $sysin<>'STACK' then do
+   "delstack"
+   "execio * diskr" $sysin "(finis)"
+ end
+ if $msglvl>0 then call xmsg 'Input...','l'
+ /* Format control data, handle continuations and comments */
+ crn=0
+ do while queued()>0
+   pull v d ';' . 0 r ';' .
+   if left(r,1)='*' | r='' then iterate
+   if left(d,1)<>'(' then do
+     if r<>'' then parse value crn+1 space(r) with crn cntl.crn
+     iterate
+   end
+   /* enclosed list */
+   cr=space(r)
+   if right(cr,1)<>')' then,
+   do while queued()>0
+     pull r ';' .
+     if left(r,1)='*' | r='' then iterate
+     cr=cr space(r)
+     if right(cr,1)=')' then leave
+   end
+   crn=crn+1
+   cntl.crn=space(translate(cr,' ','()'))
+   icrn=n
+ end
+ if crn=0 then exit xmsg(@me 'Input is empty')+4
+ cntl.0=crn
+ if $msglvl>1 then do n=1 to crn
+   say 'Input:' cntl.n
+ end
+ drop cr crn
+
+ call xmsg ''
+
+ /* Process cntl */
+ do cntln=1 to cntl.0
+   p=cntl.cntln
+   if length(p)>90 then p=left(p,90)'+'
+   call xmsg 'Input:' p,'tl'
+   if words(p)<2 then call close '*Missing parameter(s)',8
+   parse upper var cntl.cntln dbupdcmd dbupdp
+   select
+     when dbupdcmd='ADDDSN' then zz=AddDsn(dbupdp)
+     when dbupdcmd='DELDSN' then zz=DelDsn(dbupdp)
+     when dbupdcmd='DELKEY' then zz=DelKey(dbupdp)
+     when dbupdcmd='DELTXT' then zz=DelTxt(dbupdp)
+     when dbupdcmd='DELDKY' then zz=DelDky(dbupdp)
+     when dbupdcmd='DELMKY' then zz=DelMky(dbupdp)
+     when dbupdcmd='UPDDSN' then zz=UpdDsn(dbupdp)
+     when dbupdcmd='DELMBK' then zz=DelTxt($mdbkeypos dbupdp)
+     when dbupdcmd='ADDVOL' then zz=AddVol(dbupdp)
+     when dbupdcmd='DELVOL' then zz=DelVol(dbupdp)
+     when dbupdcmd='UPDVOL' then zz=UpdVol(dbupdp)
+     when left(dbupdcmd,4)='LIST' then zz=ListDb(dbupdcmd dbupdp)
+     when dbupdcmd='TSO'  then Address TSO dbupdp
+     otherwise call close '**Bad command' cntl.cntln
+   end
+ end
+
+ /* Reset changed profile option(s) */
+ if $msgid='N' then do
+   call xtso 'profile nomsgid'
+   if $msglvl>0 then call xmsg 'Profile NOMSGID set'
+ end
+ Call Close
+
+PgmSyntax:
+ trace off
+ signal off syntax
+ say '*Syntax' rc 'in line' sigl':' Errortext(rc)
+ say Sourceline(sigl)
+ Signal close
+
+PgmNoVal:
+ trace off
+ say '*Novalue raised for line' sigl '-'
+ say strip(sourceline(sigl),'t')
+ signal off novalue
+ Signal close
+
+ /* end */
+Close:
+ parse arg _m,_c
+ if _m<>'' then Call xmsg _m
+ m=''
+ if ?adddsn   then m=m #adddsn 'datasets added',
+                       #addmbr 'members added'
+ if ?deldsn   then m=m #deldsn 'datasets deleted',
+                       #delmbr 'members deleted'
+ if m<>''     then m='Stats:' m
+ if #errdsn>0 then m=m '**' #errdsn 'failed'
+ if m<>'' then call xmsg space(m)
+ _c=word(_c $rc,1)
+ Exit xmsg()+xmsg(simtxt||@me 'Update done rc' _c,'t')+_c
+
+ /*--------------------------------------------------------------------
+                             Functions
+ --------------------------------------------------------------------*/
+
+/*
+ Add datasets by name or name / vol pairs.
+ Name must be a full name without wildcards.
+ If vol is not given then a catalog search is done.
+ If vol is given then it must be a full and real name.
+*/
+AddDsn:
+ arg adsnp
+ call xmsg 'AddDsn started','t'
+ adsnn=0
+ ?adddsn=1
+ do while adsnp<>''
+   parse var adsnp adname advol adsnp
+   if pos('.',advol)>0 | advol='' then do        /* get volser from catalog */
+     adsnp=advol adsnp                           /* re-stack dsname         */
+     if ListDsi("'"adname"'")<>0 then do
+       call xmsg '  Cannot locate' adname
+       iterate
+     end
+     advol=sysvolume
+   end
+   if $msglvl>1 then call xmsg 'AddDsn' adname 'on' advol
+   if AddPdsdata(adname advol)=0 then adsnn=adsnn+1  /* add non-temp pds  */
+ end
+ Return xmsg('AddDsn done rc' cc+0 'count' adsnn,'t')
+
+/*
+ Delete records by dsn
+   Delete dsn db records, get keylist, then use the keylist
+   to locate and delete mbr db records.
+*/
+DelDsn:
+ call xmsg 'DelDsn started','t'
+ /*if arg(1)<>''  then parse value 1 arg(1) with deldsn.0 deldsn.1 */
+ ?deldsn=1
+ /* get datasetlist */
+ dln =0
+ drop deldsn.
+ arg ddsnp
+ ddsnn=0
+
+ /* reformat to db search masks */
+ #=0
+ do while ddsnp<>''
+   parse var ddsnp ddname ddvol ddsnp
+   if ddvol='' then call close 'Missing volser value for' ddname,8
+   #=#+1
+   ddsnl.#=ddvol','ddname
+ end
+ ddsnl.0=#
+
+ /* delete dsn records, get list */
+ call xmsg simtxt'Attempting to delete' ddsnl.0 'dataset records','t'
+ rxvbdele=0
+ if \?sim then,
+   if VsamAcc('Del dd(WFMDB) list(vslst.) key(0) dlm(;)',
+              'maskstem(ddsnl.) pos('$ddbvolpos')')>0,
+     then Call Close 'DelDsn get failed' vsem
+ ddsnn=rxvbdele+0
+ #deldsn=#deldsn+rxvbdele
+ dmbrn=0
+ call xmsg simtxt || ddsnn 'dataset records deleted','t'
+ if ddsnn>0 & $msglvl>0 then do #=1 to vslst.0
+   parse var vslst.# key','vol','dsn';'.
+   say '  'dsn 'on' vol
+ end
+
+ /* build mbrkey delete list then delete records by text */
+ if ddsnn>0 then do
+   do #=1 to vslst.0
+     deltxt.#=substr(vslst.#,2,$ddbmbklen)
+     if $msglvl>1 then say ' delkey:' substr(vslst.#,2,$ddbmbklen)
+   end
+   deltxt.0=vslst.0
+   drop vslst.
+   if $msglvl>1 then Call ListStem 'deltxt.','List delete-text records'
+   if $msglvl>1 then say 'Delete-text pos' $mdbdkeypos
+   p=''
+   if $msglvl>1 then p='list(dtlst.)'
+   call xmsg simtxt'Attempting to delete' 0+deltxt.0 'member keys','t'
+   if \?sim then do
+     cc=DelTxt($mdbdkeypos,p)
+     if $msglvl>1 then call ListStem 'dtlst.'
+     dmbrn=rxvbdele+0
+   end
+   else dmbrn=0
+   call xmsg simtxt || dmbrn 'member records deleted','t'
+ end
+ drop dtlst. vslst.
+ Return xmsg(simtxt'Deldsn done')
+
+ /* delete dataset records with key */
+DelDky:
+ arg dkval .
+ if ?sim then return xmsg(simtxt'Delete-by-datasetkey' dkval)
+ if length(dkval)<>$ddbmbklen | datatype(dkval)<>'NUM' then,
+   Call Close 'DelDky bad parm value',8
+ cc=VsamAcc('Del dd(WFMDB) list(vslst.) key(0'dkval')')
+ call xmsg  rxvbdele+0 'dataset record deleted'
+ if $msglvl>1 then call Liststem 'vslst.'
+ #deldsn=#deldsn+rxvbdele
+ return 0
+
+ /* delete member records with key */
+DelMky:
+ arg dkval .
+ if ?sim then return xmsg(simtxt'Delete-by-memberkey' dkval)
+ if length(dkval)<>$ddbmbklen | datatype(dkval)<>'NUM' then,
+   Call Close 'DelMky bad parm value',8
+ cc=VsamAcc('Del dd(WFMDB) list(vslst.) text('dkval') pos('$mdbdkeypos')')
+ #delmbr=#delmbr+rxvbdele
+ call xmsg  simtxt||rxvbdele+0 'member records deleted'
+ if $msglvl>2 then call Liststem 'vslst.'
+ return 0
+
+ /* delete all records (dsn and mbr) with key */
+DelKey:
+ arg dkval .
+ if ?sim then return xmsg(simtxt'Delete-by-key' dkval)
+ cc=VsamAcc('Del dd(WFMDB) list(vslst.) key('dkval')')
+ #delkey=#delkey+rxvbdele
+ call xmsg rxvbdele+0 'records deleted by key' dkval
+ if $msglvl>2 then call Liststem 'vslst.'
+ return 0
+
+/*
+ Update datasets
+*/
+UpdDsn:
+ arg udsnp
+ udsnn=0
+ call xmsg 'UpdDsn started','t'
+ if DelDsn(udsnp)>8 then call close ,8
+ cc=AddDsn(udsnp)
+ Return xmsg('Upddsn done rc' cc,'t')
+
+/*
+ Delete records by text (scans entire db)
+*/
+DelTxt:
+ arg dtpos dtval .
+ if dtval<>''  then parse value 1 dtval with deltxt.0 deltxt.1
+ if deltxt.0=0 then Return xmsg('Delete list is empty')
+ if $msglvl>1  then call xmsg simtxt||'Deleting' 0+deltxt.0 'text values','t'
+ /*if deltxt.0>1 then Call ISort 'deltxt.' */
+ drop dtlst.
+ if ?sim then return xmsg(simtxt'Delete-by-text' dtval 'in pos' dtpos)
+ if VsamAcc('del dd(WFMDB) textstem(deltxt.) pos('dtpos')' arg(2))>0,
+   then Call Close 'Delete records by text failed' vscc
+ deltxt#=0+rxvbdele
+ if dtval<>''  then,
+   call xmsg simtxt||deltxt# 'records deleted for' dtval 'in pos' dtpos,'t'
+ else,
+   call xmsg simtxt||deltxt# 'records deleted for' 0+deltxt.0 'keys','t'
+ Return vscc
+
+ /* Get VTOC list, add to dbs
+ Sample list:
+  ----+----1----+----2----+----3----+----4----+----5----+----6----+----7
+  APS460.SAUPLOAD                              Z27RS6 PO  U       0
+  APS460.SAUPSAMP                              Z27RS6 PO  FB     80
+  HSI810.SHSIANL1                              Z27RS6 PE  VB    255
+ */
+AddVol:
+ arg avolp
+ call xmsg 'AddVol started','t'
+ if avolp='=' then ,
+   parse value wfmvoll('sys','vol','=') with cc avoll
+ else avoll=FilterVolList(avolp)
+ if avoll='' then call close  '*No online volumes found for list',8
+ avoln=words(avoll)
+ avol#=0
+ call ListVolList avoll,'Volumes selected'
+ avoldn=0
+ do while avoll<>''                              /* process volume list      */
+   parse var avoll avolv avoll
+   avdn=0
+   avol#=avol#+1
+   call xmsg 'Adding' avolv '('avol# 'of' avoln')','t'
+   zz=outtrap('avl.')
+   address tso "VTOC ("avolv") LIMIT(DSO EQ PO) OR1(DSO EQ PE)",
+   "NOHEADING PRINT(NEW (DSNAME VOLUME DSO RFM LRECL ))"
+   zz=outtrap('off')
+   if avl.0 <=1 then do
+     call xmsg(simtxt'No pds(e) found on' avolv)
+     iterate
+   end
+   if $msglvl>0 then call xmsg simtxt'Build dataset list...'
+   avdn=0
+   avmn=0
+   do avn=1 to avl.0
+     parse var avl.avn avd avv .
+     if avv='-' | avd='' then iterate
+     if AddPdsdata(avd avv)=0 then do
+       avdn=avdn+1
+       avmn=avmn+mbrn
+     end
+   end
+   avoldn=avoldn+avdn
+   call xmsg simtxt'Addvol' avolv 'ended,' avdn 'datasets added,',
+        avmn 'members added'
+ end                                             /* process volume list end  */
+ return xmsg(simtxt'Addvol ended,' avoldn 'datasets added in total')
+
+/*
+ Delete dataset records by vol
+*/
+DelVol:
+ arg dvolp
+ dvoll=''
+ dvoln=0
+ dvoldn=0
+ totdeln=0
+ call xmsg 'DelVol started','t'
+ n=1
+ do while dvolp<>''
+   parse var dvolp v dvolp
+   parse value n+1 left(v,6,'%') with n deltxt.n
+ end
+ deltxt.0=n
+ if $msglvl>1 then call ListStem 'deltxt.','Text to delete in col' $ddbvolpos
+ if ?sim then return xmsg(simtxt'Delvol done..')
+ if VsamAcc('del dd(WFMDB) maskstem(deltxt.)',
+            'pos('$ddbvolpos') endpos('$ddbvolpen')',
+            'list(vslst.)')>0 then,
+   Call Close 'Delete records by text failed' vsem
+ if $msglvl>2 then call liststem 'vslst.','delete dataset list'
+ call xmsg simtxt || 0+rxvbdele 'datasets deleted','t'
+ /* now delete member records */
+ do #=1 to vslst.0
+   if $msglvl>0 then say  ' 'vslst.#
+   deltxt.#=substr(vslst.#,$ddbmbkpos,$ddbmbklen)
+   v=substr(vslst.#,$ddbvolpos,6)
+   if wordpos(v,dvoll)=0 then dvoll=dvoll v
+ end
+ deltxt.0=vslst.0
+ if \?sim then do
+   if $msglvl>1 then Call ListStem 'deltxt.','List delete-text records'
+   drop vslst.
+   p=''
+   if $msglvl>1 then p='list(dtlst.)'
+   cc=DelTxt($mdbdkeypos,p)
+   if $msglvl>2 then call ListStem 'dtlst.'
+   call xmsg simtxt || 0+rxvbdele 'members deleted','t'
+   drop dtlst. deltxt.
+ end
+ delvol#=words(dvoll)
+ call xmsg delvol# 'volumes processed','t'
+ if $msglvl>0 then call ListVolList dvoll
+ Return 0
+
+/*
+ Update dataset records by vol (delvol+addvol)
+*/
+UpdVol:
+ arg uvolp
+ if $msglvl>1 then call xmsg simtxt'UpdVol' arg(1),'tl'
+ totavdn=0
+ Call DelVol arg(1)
+ Call AddVol arg(1)
+ totavdn=totavdn+avdn
+ return 0
+ return xmsg(simtxt'Updvol ended,' totavdn 'datasets added in total')
+
+ListVolList:
+ if arg(2)<>'' then call xmsg arg(2)
+ vl=arg(1)
+ do while vl<>''
+   parse var vl v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 vl
+   say ' 'v1 v2 v3 v4 v5 v6 v7 v8 v9 v10
+ end
+ return 0
+
+/*
+ Call external list cmd
+*/
+ListDb:
+ Return xmsg('List' substr(arg(1),5)),
+      + WfmDbLst('CMD('substr(arg(1),5)')')
+
+/*
+ Dataset info, make lists dsnal. and mbral.
+ ----+----1----+----2----+----3----+----4----+----5----+----6----+----7----+---
+ PDS200I DISP UNIT     RECFM LRECL BLKSIZE   ALLOCTRK FREETRK SECONDARY FREEDIR
+ PDS200I SHR  3390     FB       80    5600   1X     7       0     3 TRK       5
+
+ Samples
+  Srclib member info
+  PDS230I MEMBER      VER.MOD  CREATED   LAST MODIFIED  SIZE  INIT   MOD   ID
+  PDS230I  $$$#DATE    01.00  02/09/29  02/09/29 22:29    12    12     0  SHIPDA
+
+  Pgmlib member info
+  PDS232I NAME     ALIASOF   CREATED  SIZE SSI      ATTRIBUTES
+  PDS232I MSGXRBL           17/01/20  5800          R24, A31
+
+ Key is build as a 12-byte date/time number.
+ The key value should be unique till at least jan 2040
+
+ Samples
+  1       10        20        30        40        50
+  K---+----+-K--+----+----+----+----+----+----+----+----+--
+  025720514346 Z27RS6 APS460.FDEFLIB PO VB 8205 27998 Y  source
+  025719342264 SYSAS1 SYSA.PRD.LOAD PO U 0 23200 Y       loadlib
+*/
+AddPdsData:
+ arg apdsn apvol .
+ mbrn=0
+ trace off
+ if IsTempDs(apdsn apvol) then return 1
+ dkey =  right(date('c')-$dbdcdif,4,0),                   /* 4-byte date */
+      || left(space(translate(time('l'),' ',':.'),0),8,0) /* hhmmssth    */
+ apdtxt=''
+ if $msglvl=9 then call xmsg simtxt'AddPdsData parm:' arg(1)
+ dsckn=dsckn+1
+ if dsckn< 0 then trace r
+ k=translate(space(apvol'\'apdsn,0),'_','.')
+ if dsck.apdsn>1 then return 0   /* already checked and failed */
+ cc=RXSAFCHK('read','dataset',apdsn)
+ if cc<>0 & RXSAFCHK_CODES <>'00000004 00000004' then do
+   say '**SAFCHK for' apdsn 'failed rc' cc 'cc' RXSAFCHK_CODES RXSAFCHK_REASON
+   dsck.apdsn=2                   /* set 'failed'               */
+   return 2
+ end
+ dsck.apdsn=1                     /* checked, ok                */
+ trace off
+ if apvol='' then apvol=GetCatVol(apdsn)
+ /*if $msglvl>1 then zz=xmsg(simtxt'Add dataset "'apdsn'" vol "'apvol'"') */
+ if \IsPoDs(apdsn apvol) then return 1
+ /* cataloged info */
+ dscat='N'
+ cc=XTSO("listc ent('"apdsn"') volume")
+ if cc=0 then do
+   n=$.0
+   cvol = right(word($.n,1),6)
+   if cvol='******' then cvol=iplvol
+   if cvol=sysvolume then dscat='Y'
+   else                   dscat='O'
+ end
+ apdtxt = dkey space(apvol apdsn sysdsorg sysrecfm syslrecl sysblksize dscat)
+
+ /* simulate then bypass library scan */
+ if ?sim then return xmsg('(SIM) Adding' apdsn 'vol' apvol)
+
+ /* Generate member update list */
+ cc=outtrap('pl.')
+ ""$wfmpdsm "'"apdsn"' vol("apvol") attr : short"
+ cc=rc
+ cde=''
+ if cc<0 then do
+   #errdsn=#errdsn+1
+   c  = d2x(-1*cc)     /* readable abend code */
+   cde=' ('c')'
+   if c=913 then cde=cde 'security'
+ end
+ zz=outtrap('off')
+ if cc<>0 then do
+   call xmsg 'PDSMAIN' apdsn apvol 'rc' cc||cde '****'
+   if cc>4 then call ListStem 'pl.'
+   return SetRc(4)+4
+ end
+
+ parse value '0 0 0 PO' with mbral.0 mln pp dsorg name vermod created id,
+      updated attr size init ssi mod aliasof dsinfo lastname
+
+ Do pp=1 to pl.0
+   parse var pl.pp w1 w2 w3 .
+   Select
+     when w1='PDS230I' & w3='VER.MOD' then iterate
+     when w1='PDS232I' & w3='ALIASOF' then iterate
+     when w1='PDS230I' | w1='PDS232I' then do
+       parse value '' with name vermod created id,
+          updated attr size init ssi mod aliasof
+       if w1='PDS230I' then do  /*  srclib */
+         if w3='SSI:' then parse var pl.pp . =10 name +8 . ssi .
+         else,
+           parse var pl.pp . =10 name +8 . =21 vermod =29 created +8 .,
+           =39 updated =54 size =60 init =66 mod =73 id
+       end
+       else ,                   /*  pgmlib */
+         parse var pl.pp . =9 name =18 aliasof,
+           =27 created =36 size =42 ssi =51 attr
+       if pos('.',name)>0 then do
+         if $msglvl>1 then call xmsg name 'invalid member name, ignored'
+         iterate
+       end
+       if name=lastname then do
+         if $msglvl>1 then call xmsg name 'duplicate member name, ignored'
+         iterate
+       end
+       lastname=name
+       n=1+mbral.0
+       mbral.n=left(strip(name),8,'\')dkey,
+       || space(id';'created';'updated';'vermod';'mod';'size';'init';',
+              ssi';'attr';'aliasof,0)
+       mbral.0 = n
+     end
+     when w1='PDS400W' then leave
+   /*when w1='PDS400W' then return xmsg('Empty library')+3*/
+     when w1='PDS530W' then return xmsg('Not a library')+3
+   /*when w1='PDS531W' then dsnal.dsaln=overlay('PE',dsnal.dsaln,66) pdse*/
+     otherwise nop
+   end
+ end
+
+ if mbral.0=0 & $msglvl>0 then call xmsg ' No members in' apdsn
+ if mbral.0>0 then do
+ /*if mbral.0>1 then call isort 'mbral.'*/
+   if ?sim then cc=xmsg('(SIM) Addding' mbral.0 'members')
+ end
+ mbrn=mbral.0
+ #addmbr=#addmbr+mbral.0
+
+ /* add dataset info */
+ #adddsn=#adddsn+1
+ parse value apdtxt mbral.0 with dsnkey dsnvol dsnname,
+             dsndsorg dsnrecfm dsnlrecl dsnblksz dsncat dsnmbrn
+ n=1+mbral.0
+ interpret "mbral.n="$dbdmap
+ mbral.0=n
+ if ?sim then return xmsg('(SIM) Db add' mbral.n)
+ if VsamAcc('put dd('$wfmdd') stem(mbral.)')>0 then call close vsem,8
+ if $msglvl>0 then,
+   call xmsg simtxt 'Dsn' apdsn 'on' apvol 'with' mbral.0 -1 'members',
+                    'added with key' dkey
+ if $msglvl>2 then call ListStem simtxt'mbral.','Members added..'
+ return 0
+
+ /*--------------------------------------------------------------------
+                          Some subroutines
+ --------------------------------------------------------------------*/
+
+SetRc: $rc=max(arg(1),$rc);return 0
+
+XMsg:
+ trace off
+ if arg(1)='' & lastxmsg='' then return 0
+ arg ,p2
+ if pos('L',p2)>0 & lastxmsg<>'' then say ''     /* leading text             */
+ if pos('T',p2)>0 then say time() arg(1)         /* time+text                */
+ else say arg(1)
+ lastxmsg=arg(1)
+ return 0
+
+XTso: trace off; zz=outtrap(word(arg(2) '$.',1))
+        address tso arg(1);zz=outtrap('off');xtsorc=rc;return rc
+
+IntCmd: Interpret arg(1);return 0                /* Command as function      */
+
+IsPoDs:  /* return 1 (true) pods */
+trace off
+ arg ipdp
+ if words(ipdp)=0 | words(ipdp)>2 then,
+   exit xmsg('IsPoDs bad parm' ipdp '***')+16
+ ipdt=''
+ parse var ipdp ipdds ipdvl .
+ ipdp=space(ipdds ipdvl)
+ if ipdvl<>'' & ipdvl<>'*' then cc=Listdsi("'"ipdds"' volume("ipdvl")")
+ else cc=Listdsi("'"ipdds"'")
+ select
+   when cc=16 & sysreason=24 then ipdt=ipdp 'not found'
+   when cc=16 then,
+     ipdt=ipdds 'vol' ipdvl 'listdsi error' cc 'rsn' sysreason+0 ,
+          listdsic(sysreason)
+   when cc<>0 then ipdt=ipdds 'vol' ipdvl,
+     'Listdsi rc' cc 'rs' sysreason+0 '-' listdsic(sysreason)
+   when left(sysdsorg,2)<>'PO' then,
+     ipdt=ipdds 'on' ipdvl 'not partitioned'
+   otherwise nop
+ end
+ if sysdssms='PDSE' then sysdsorg='PE'
+ sysrecfm=left(space(translate(sysrecfm,' ',','),0),2)
+ if ipdt='' then return 1
+ if $msglvl>1 then call xmsg ipdt
+ return 0
+
+IsTempDs: Procedure expose $msglvl
+ trace off
+ arg dsn vol . 0 q1'.'q2'.'q3'.'.
+ if left(q1,3)='SYS' & datatype(right(q1,5))='NUM',
+  & length(q2)=7 & left(q2,1)='T' & datatype(right(q2,6))='NUM',
+  & q3<>'' then do
+   if $msglvl>1 then call xmsg space(dsn vol) 'bypassed, temp dsn'
+   return 1
+ end
+ return 0                   /* not temp */
+
+VsamAcc: /* parms  1: command  */
+ zz  =arg(1)
+ if $msglvl>2 then call xmsg 'VSAMACC' arg(1)
+ vscc=0+RxVsamBa(arg(1))
+ zz=rxvbread+0 rxvbwrit+0 rxvbdele+0
+ if $msglvl<3 & vscc<8 then return vscc
+ if rxvberrm<>'' then rxvberrm='msg' rxvberrm
+ vsem='VsamAcc' arg(1) 'rc' space(vscc rxvberrm)
+ call xmsg 'VsamAcc' arg(1) 'rc' space(vscc rxvberrm)
+ return vscc
+ call xmsg word(arg(1),1) 'rc' space(vscc rxvberrm)
+
+GetCatVol: Procedure
+ cc=XTSO("Listc ent('"arg(1)"') vol")
+ if cc<>0 then return ''
+ n=$.0
+ return word(translate($.n,' ','-'),2)
+
+FilterVolList: Procedure expose ucbvol.         /* filter ucbvol list */
+ arg fltlst
+ fl#=words(fltlst)
+ r=''
+ do u#=1 to ucbvol.0
+   uv=ucbvol.u#
+   ?ok=0
+   do f#=1 to fl# until ?ok
+     fv=word(fltlst,f#)
+     if fv=uv then ?ok=1
+     else if verify(fv,'*%','m')>0 then ?ok=Pattern(fv,uv)
+   end
+   if ?ok then r=r uv
+ end
+ return strip(r)
+
+ListStem:
+ parse arg lsn .,lsh
+ lsn=translate(strip(lsn,'t','.'))'.'  /* ensure trailing dot */
+ if lsh<>'' then call xmsg lsh
+ lsnc=Value(lsn'0')    /* get count */
+ do lsnn=1 to lsnc
+   call xmsg ' 'value(lsn||lsnn)
+ end
+ if lsh<>'' then call xmsg ''
+ return 0
+
+ListList:
+ parse arg llp,llh
+ upper llp
+ if llh<>'' then call xmsg llh
+ do llpn=1 to words(llp)
+   call xmsg ' 'word(llp,llpn)
+ end
+ if llh<>'' then call xmsg ''
+ return 0
+
+ISort: Interpret sortpgm;Return 0
+
+/*
+ PATTERN
+ Parameters   mask,stringÝ,maskchrs¨
+ Returns   0  (false)  not matched or missing parm
+           1  (true )  match
+ Sample:  rc=RxPatMat('*EFG*','ABCDEFGH')
+*/
+Pattern: Procedure
+ trace off
+ if arg()<2 then exit 0
+ parse arg msk,str,mchr
+ parse value word(mchr '*%',1) with mchr 1 mcm +1 mco  /* split mask chrs    */
+ parse value 1 1 length(msk) length(str) with mp sp ml sl .
+ do while mp<=ml & sp<=sl
+   select
+     when substr(msk,mp,1)=mco then,                   /* mask starts with % */
+       parse value mp+1 sp+1 with mp sp                /* bump ptrs          */
+     when substr(msk,mp)=mcm then return 1             /* match on rest      */
+     when substr(msk,mp,2)=mchr then do                /* both mask chrs     */
+       mp=mp+1
+       msp=verify(msk,mco,'n',mp+1)                    /* mak sub-str pos    */
+       if msp=0 then return (ml-mp)=(sl-sp)            /* rest mask is %s    */
+       p=verify(msk,mchr,'m',msp)
+       if p>0 then msl=p-msp
+       else msl=ml+1-msp
+       ms=substr(msk,msp,msl)                          /* mask substring     */
+       mpl=msp-mp                                      /* mask chrs len      */
+       p=pos(ms,str,sp+mpl)
+       if p=0 then return 0
+       sp=p-mpl
+     end
+     when substr(msk,mp,2)=mcm||mcm then mp=mp+1       /* double '*'         */
+     when substr(msk,mp,1)=mcm then do                 /* '*'                */
+       mp=mp+1                                         /* bump mask          */
+       p=verify(msk,mchr,'m',mp)                       /* -> end mask chr    */
+       if p=0 then return substr(msk,mp)=right(str,ml-mp+1) /* no more maskc */
+       ms=substr(msk,mp,p-mp)                          /* mask substr        */
+       msl=length(ms)
+       mp=p
+       p=pos(ms,str,sp)                                /* locate in string   */
+       if p=0 then return 0                            /* not found          */
+       sp=p+msl
+     end
+     when substr(str,sp,1)<>substr(msk,mp,1) then return 0 /* not matched    */
+     otherwise do
+       p=verify(msk,mchr,'m',mp)                       /* locate msk chr     */
+       if p=0 then return substr(msk,mp)=substr(str,sp)/* no more mask chrs  */
+       l=p-mp
+       if substr(msk,mp,l)<>substr(str,sp,l) then return 0
+       mp=mp+l
+       sp=sp+l
+     end
+   end
+ end
+ return (mp>ml & sp>sl ) | (mp=ml & substr(msk,mp)='*') /* both exhausted ?   */
+
+ListDsiC: Procedure
+ t.  ='******'
+ t.0 ='Normal completion.'
+ t.1 ='Error parsing the function.'
+ t.2 ='Dynamic allocation processing error.'
+ t.3 ='The data set is a type that cannot be processed.'
+ t.4 ='Error determining UNIT name.'
+ t.5 ='Data set not cataloged.'
+ t.6 ='Error obtaining the data set name.'
+ t.7 ='Error finding device type.'
+ t.8 ='The data set does not reside on DASD.'
+ t.9 ='DFHSM migrated the data set,',
+      'NORECALL prevents retrieval.'
+ t.11='Directory information was requested, but you lack',
+      'authority to access the data set.'
+ t.12='VSAM data sets are not supported.'
+ t.13='The data set could not be opened.'
+ t.14='Device type not found in UCB tables.'
+ t.17='System or user abend occurred.'
+ t.18='Partial data set information was obtained.'
+ t.19='Data set resides on multiple volumes.'
+ t.20='Device type not found in eligible device table.'
+ t.21='Catalog error trying to locate the data set.'
+ t.22='Volume not mounted.'
+ t.23='Permanent I/O error on volume.'
+ t.24='Data set not found.'
+ t.25='Data set migrated to non-DASD device.'
+ t.27='No volume serial is allocated to the data set.'
+ t.28='The ddname must be one to eight characters.'
+ t.29='Data set name or ddname must be specified.'
+ t.30='Data set is not SMS-managed.'
+ t.31='ISITMGD macro returned with bad return code and reason code.',
+      'Return code and reason code can be found in message',
+      'IKJ58431I, which is returned in variable &SYSMSGLVL2.'
+ t.32='Unable to retrieve SMS information.',
+      'DFSMS/MVS has incorrect level.'
+ n=arg(1)+0
+ return t.n

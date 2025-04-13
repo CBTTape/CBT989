@@ -1,0 +1,35 @@
+)ATTR
+ +  type(text) color(green)
+ %  type(text) color(white)
+ "  type(text  ) color(blue  )
+ #  type(input ) color(turq  ) hilite(uscore) caps(on)
+ !  type(output) color(turq  )
+ @  type(output) color(yellow)
+)BODY EXPAND(\\)
+%\ \Create database\ \+
+%Cmd =>_zcmd \ \+    +
++
++
++ Dsname    #dbds                                       +
++            Fully qualified, quotes are ignored        +
++ Cylinders #dbsp +  +assume 4000 records per cyl, 150 mbrs per dsn
++ Volume    #dbvl  +  optional volser for non-sms managed volume
++ Storclass #dbsc    +   -     SMS storage class
++
+%Options
++ Reclaim CA#z+ n/Y
+)INIT
+ .zvars = '(rclmca)'
+ &dbds = &$WFMMBR
+ if (&dbds EQ &Z) &dbds = '&zuser..FINDMBR.V012.DB'
+ if (&dbds EQ &Z) &dbds = &$wfmdb
+ if (&dbsp EQ &Z) &dbsp = 50
+ if (&dbvl EQ &Z) &dbvl = &$wfmdbv
+ if (&rclmca EQ &Z) &rclmca = Y
+)PROC
+ &drec = &Z
+ Ver (&dbds,nb)
+ Ver (&dbsp,nb,num)
+ &mrec = &Z
+ Ver (&rclmca,nb,list,N,Y)
+)END

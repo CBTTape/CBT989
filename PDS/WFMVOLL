@@ -1,0 +1,224 @@
+/* WFMVOLL                                                              rexx
+ Return volume list
+  -  from system (online dasd), optionally filtered by the VOLSEL parm
+     member
+  -  from dsn database / database section
+
+ Parm 1  - source
+   SYS      generate online dasd list
+   DB       generate list of volser in database
+   BOTH     generate combined list
+   DBO      generate list of volser in database only where no system
+            volume is found.
+   SYSO     generate list of online dasd where no database volume is
+            found.
+  This parameter is required.
+
+ Parm 2  - return format
+   VOLser   return list of volsers only, no status.
+  Default is to return dublets consisting of devnr and status as
+  follows
+      D     found in database only, not online in system
+      B     found in system and database
+      S     found in system only, not in database
+
+ Parm 3  - filter
+   '='      use the VOLSEL external definitions.
+   vollist  list of descrete volser or mask.
+  Default is no filter.
+
+ Returns
+   rc text
+    rc=0  All ok and a list is generated.
+    rc>0  Some error occured and the text is an explaining text.
+    text  A list defined by parm 2, or an error message.
+
+ Sample
+   parse value WfmVoll('sys','volser','d* sysc*') with cc voll
+
+ History
+  2024-07-18  Add filter to all vol list generators.
+  2024-10-11  Allow unlimited number of volumes in include/exclude.
+  2024-10-14  Move call to WFMCPARS up in pgm
+  2024-11-05  Set ALLOW(NULL) for WFMCPARS
+  2024-11-09  Major rewrite. Allow list of volsers in selection.
+  2024-11-20  Fix include/exclude and VOLSER issue.
+*/
+ parse source sys @what @me ddn @where .
+ parse value '' with syslist dbv vollist dbl. vser. vstat. ,
+   $include $exclude
+ parse value copies('0 ',30) with ?inclv ?exclv ?dbo ?syso vnum .
+ arg $src,$fmt,$volp
+ if $src='ALL'  then $src='BOTH'
+ if $src='COMB' then $src='BOTH'
+ if $src='DBO'  then parse value 'BOTH 1' with $src ?dbo
+ if $src='SYSO' then parse value 'BOTH 1' with $src ?syso
+ if wordpos($src,'BOTH DB SYS DBO SYSO')=0 then return 8 'Bad parm 1'
+
+ if $volp='=' then do                                  /* Load from VOLSEL    */
+   p='DD(VOLSEL)'
+   Interpret WFMCPARS('ALLOW(NULL) ')
+   if cc<>0 then exit 8                                /* cc set by WFMCPARS  */
+ end
+ else if $volp<>'' then $include=$volp
+ ?inclv=($include<>'')
+ ?exclv=($exclude<>'')
+ upper $include $exclude
+ sortpgm=WfmSortp()
+
+ /*-------------------------------------------------------------------
+                       load list of online dasd
+ --------------------------------------------------------------------*/
+ if wordpos($src,'SYS BOTH')>0 then do
+   cc=RXUCBSCN('*','list.')         /* Using my own RXUCBSCN program */
+   do n=1 to list.0
+     parse var list.n dev vol state .
+     if state<>'ON' then iterate
+     parse value vnum+1 vol 'S' with vnum vser.vnum vstat.vol
+   end
+ end
+
+ /*-------------------------------------------------------------------
+                    set/add unique volsers from db
+ -------------------------------------------------------------------*/
+ if wordpos($src,'DB BOTH')>0 then do
+   Interpret WfmGSet()
+   drop dbl. dbv.
+   dbv.=''
+   cc=RxVsamBa('get dd('$wfmdd') stem(dbl.)' $ddbvsbkey)
+   zz=cc rxvbread
+   if cc<>0 then return '8 Read dsn db rc' cc rxvberrm
+   do n=1 to dbl.0
+     interpret "parse var dbl.n" $dbdparse
+     vol=dsnvol
+     if dbv.vol<>'' then iterate            /* already found     */
+     dbv.vol='+'                            /* set 'done'        */
+     if vstat.vol='' then ,                 /* new in list       */
+       parse value vnum+1 vol 'D' with vnum vser.vnum vstat.vol
+     else vstat.vol='B'                     /* set 'both'        */
+   end
+ end
+ vser.0=vnum
+
+ /*-------------------------------------------------------------------
+                            apply filters
+ -------------------------------------------------------------------*/
+ vsel=''
+ if $volp<>'=' then do n=1 to words($volp)
+    parse var $volp v $volp
+   if length(v)<6 & verify(v,'*%','m')=0 then v=v'*'
+   vsel=vsel v
+ end
+ else vsel='*'
+ /* volume source selection */
+ if ?dbo | ?syso then do
+   do n=1 to vser.0
+     vol=vser.n
+     st =vstat.vol
+     if ?dbo  & st<>'D' then vstat.vol='-'
+     if ?syso & st<>'S' then vstat.vol='-'
+   end
+ end
+ /* pass 1 - apply include filter */
+ if ?inclv then do vsern=1 to vser.0
+   vol=vser.vsern
+   if vstat.vol='-' then iterate               /* already dropped          */
+ /*if \filterlist(vsel,vol) then vstat.vol='-' */
+   if \filterlist($include,vol) then vstat.vol='-'
+ end
+ /* pass 2 - apply exclude filter */
+ if ?exclv then do vsern=1 to vser.0
+   vol=vser.vsern
+   if vstat.vol='-' then iterate               /* already dropped          */
+ /*if filterlist(vsel,vol) then vstat.vol='-' */
+   if filterlist($exclude,vol) then vstat.vol='-'
+ end
+
+ /*--------------------------------------------------------------------
+                  sort, then filter, then format list
+ --------------------------------------------------------------------*/
+ if vser.0>1 then Call Sortit 'vser.'
+ r=''
+ ?volonly=(abbrev('VOLSER',$fmt,3))
+ do n=1 to vser.0
+   vol=vser.n
+   st =vstat.vol
+   if vstat.vol='-' then iterate
+   if ?volonly then st=''
+   r=r vol st
+ end
+
+ /*--------------------------------------------------------------------
+                                End
+ --------------------------------------------------------------------*/
+ return 0 space(r)
+
+Filterlist:
+ trace off
+ arg flist,flarg
+ do fln=1 to words(flist)
+   flw=word(flist,fln)
+   if verify(flw,'*%','m')>0 then do             /* volser is a mask         */
+     if Pattern(flw,flarg) then return 1
+   end
+   else if flw=flarg then return 1
+ end
+ return 0
+
+Sortit: Interpret SortPgm; return 0              /* sort subroutine          */
+
+ /*--------------------------------------------------------------------
+                       PATTERN subroutine
+ Parameters   mask,stringÝ,maskchrs¨
+ Returns   0  (false)  not matched or missing parm
+           1  (true )  match
+ Sample:  rc=RxPatMat('*EFG*','ABCDEFGH')
+ --------------------------------------------------------------------*/
+Pattern:
+trace off
+ if arg()<2 then exit 0
+ parse arg msk,str,mchr
+ parse value word(mchr '*%',1) with mchr 1 mcm +1 mco  /* split mask chrs    */
+ parse value 1 1 length(msk) length(str) with mp sp ml sl .
+ do while mp<=ml & sp<=sl
+   select
+     when substr(msk,mp,1)=mco then,                   /* mask starts with % */
+       parse value mp+1 sp+1 with mp sp                /* bump ptrs          */
+     when substr(msk,mp)=mcm then return 1             /* match on rest      */
+     when substr(msk,mp,2)=mchr then do                /* both mask chrs     */
+       mp=mp+1
+       msp=verify(msk,mco,'n',mp+1)                    /* mak sub-str pos    */
+       if msp=0 then return (ml-mp)=(sl-sp)            /* rest mask is %s    */
+       p=verify(msk,mchr,'m',msp)
+       if p>0 then msl=p-msp
+       else msl=ml+1-msp
+       ms=substr(msk,msp,msl)                          /* mask substring     */
+       mpl=msp-mp                                      /* mask chrs len      */
+       p=pos(ms,str,sp+mpl)
+       if p=0 then return 0
+       sp=p-mpl
+     end
+     when substr(msk,mp,2)=mcm||mcm then mp=mp+1       /* double '*'         */
+     when substr(msk,mp,1)=mcm then do                 /* '*'                */
+       mp=mp+1                                         /* bump mask          */
+       p=verify(msk,mchr,'m',mp)                       /* -> end mask chr    */
+       if p=0 then return substr(msk,mp)=right(str,ml-mp+1) /* no more maskc */
+       ms=substr(msk,mp,p-mp)                          /* mask substr        */
+       msl=length(ms)
+       mp=p
+       p=pos(ms,str,sp)                                /* locate in string   */
+       if p=0 then return 0                            /* not found          */
+       sp=p+msl
+     end
+     when substr(str,sp,1)<>substr(msk,mp,1) then return 0 /* not matched    */
+     otherwise do
+       p=verify(msk,mchr,'m',mp)                       /* locate msk chr     */
+       if p=0 then return substr(msk,mp)=substr(str,sp)/* no more mask chrs  */
+       l=p-mp
+       if substr(msk,mp,l)<>substr(str,sp,l) then return 0
+       mp=mp+l
+       sp=sp+l
+     end
+   end
+ end
+ return (mp>ml & sp>sl ) | (mp=ml & substr(msk,mp)='*') /* both exhausted ?   */

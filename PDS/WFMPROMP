@@ -1,0 +1,33 @@
+)Attr
+ +  type(text   ) color(turq ) caps(off)
+ !  type(text   ) color(yellow) caps(off)
+ _  type(input  ) color(turq ) caps(on )  hilite(uscore)
+ |  area(dynamic) extend(on) scroll(on)                   /* required      */
+ /* Specials   */
+ 01 type(dataout) color(blue  ) caps(off)                 /* line break    */
+ 02 type(datain ) color(turq  ) caps(on ) hilite(uscore)  /* sel field     */
+ 03 type(datain ) color(red   ) caps(on ) hilite(uscore)  /* sel field     */
+ /* Standard input */
+ 04 type(datain ) color(blue  ) caps(off)                 /* PDA@IB  @IB   */
+ 05 type(datain ) color(green ) caps(off)                 /* PDA@IG  @IG   */
+ 06 type(datain ) color(pink  ) caps(off)                 /* PDA@IP  @IP   */
+ 07 type(datain ) color(red   ) caps(off)                 /* PDA@IR  @IR   */
+ 08 type(datain ) color(turq  ) caps(off)                 /* PDA@IT  @IT   */
+ 09 type(datain ) color(white ) caps(off)                 /* PDA@IW  @IW   */
+ 0A type(datain ) color(yellow) caps(off)                 /* PDA@IY  @IY   */
+ /* Standard output */
+ 0F type(dataout) color(blue  ) caps(off)                 /* PDA@OB  @OB   */
+ 10 type(dataout) color(green ) caps(off)                 /* PDA@OG  @OG   */
+ 11 type(dataout) color(pink  ) caps(off)                 /* PDA@OP  @OP   */
+ 12 type(dataout) color(red   ) caps(off)                 /* PDA@OR  @OR   */
+ 13 type(dataout) color(turq  ) caps(off)                 /* PDA@OT  @OT   */
+ 14 type(dataout) color(white ) caps(off)                 /* PDA@OW  @OW   */
+ 15 type(dataout) color(yellow) caps(off)                 /* PDA@OY  @OY   */
+)Body expand(\\) width(80)
+%&pnlhdr\ \+
+%ISPF cmd ==>_zcmd \ \    +
+!&pnllmsg \ \+
+|pnlarea\ \|
+)Init
+)Proc
+)End

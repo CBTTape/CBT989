@@ -1,0 +1,15 @@
+)CM ?? Delete duplicate dataset- and associated mbr records ? skel ?
+)SET JOBPARMS = WFMDBDDU,WFM-del-dup-dsnrecs
+)IM WFM$JBST
+//*
+//* Delete duplicate dsn records and associated mbr records
+//*
+//   SET     WFMLIB=&WFMLIB
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+//*
+.*    Parm
+.*     MSGLVL(n)   gt 0 shows more messages
+.*     TYPRUN(t)   SIM or RUN
+//GO       EXEC WFMPROC,PG=WFMDLDUD,PM='MSGLVL(0) TYPRUN(SIM)'
+//*O       EXEC WFMPROC,PG=WFMDLDUD,PM='MSGLVL(1) TYPRUN(RUN)'

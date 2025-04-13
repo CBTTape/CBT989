@@ -1,0 +1,68 @@
+)SET JOBPARMS = WFMDBUPD,WFM-db-update
+)IM WFM$JBST
+//*
+//* Add or delete records by various criteria
+//*
+//   SET     WFMLIB=&WFMLIB
+)IM WFM$JCLL
+//   INCLUDE MEMBER=WFMSET
+//*
+.* Parameters
+.*   SYSIN(s)                Libref or STACK. Default is SYSIN
+.*   MSGLVL(n)               gt 0 for more messages
+.*   TYPRUN(RUN || SIM)      Run mode
+//DBUPD    EXEC WFMPROC,PG=WFMDBUPD,PM='MSGLVL(1) TYPRUN(SIM)'
+//SYSIN    DD *
+.* Use the MD line command to turn a noteline into a text line.
+.* Semi-colon ends command / starts comment.
+.*
+.* Dataset related
+.*  ADDDSN dsname Ývolser¨  ;add dataset, optionally by volser
+.*  ADDDSN dsname-mask      ;add datasets by mask, volser is from
+.*                           catalog search. *note* no check for
+.*                           duplicate name
+.*  DELDSN dsname volser    ;Delete datasets on volser/mask.
+.*  UPDDSN dsname volser    ;Update dataset on volser/mask.
+.*  DELTXT pos text         ;Delete by 'text' starting in 'pos'
+)DEFAULT  )&?!<#>
+.*  ADDVOL vollist | =      ;Add pds/pdse from named disk. vollist may a
+.*                           list of descrete volser, volser prefix or
+.*                           mask, or a mixture thereof. '=' means use
+.*                           the VOLSEL libref - see the procedure.
+.*  DELVOL vollist | =      ;Delete volser(s). See the vollist
+.*                           description under ADDVOL.
+.*  UPDVOL vollist | =      ;combined DELVOL + ADDVOL. See the vollist
+.*                           description under ADDVOL.
+.*  LISTDSN dsname Ývolser¨ ;List info for dataset.
+.*  LISTVOL volser          ;List info for volume.
+)DEFAULT  )&?!<|>
+.*
+.* Notes
+.*  -  Input is case insensitive.
+.*  -  Lines cannot be contined, but you can have many lines, i.e.
+.*     multiple ADDVOL commands.
+.*  -  Volser mask may be a single asterix.
+.*
+.* Samples
+.*  addvol  sys001
+.*  updvol  *v13 stg*
+//
+.* VOLSEL sample for ADDVOL =
+.*
+.* Enter data in order of most specific to least specifc, i.e. SYSAS2
+.* SYSA. Wildcards are supported. If the width of a volser is less than
+.* 6, then a trailing '*' is added.
+.*
+.* Either INCLUDE or EXCLUDE may be omitted or be a null value.
+//VOLSEL    DD *
+ INCLUDE(
+  Z27
+  VP
+  WORK
+  SYS
+ )
+ EXCLUDE(
+  ZZSA01
+  Z27re0
+  SYSAL
+ )

@@ -1,0 +1,54 @@
+//WFMNDAYL JOB (1),'WFM-new-day',
+//*  RESTART=SMFCP,
+//   CLASS=A,COND=(3,LT),REGION=128M
+//*
+//* Update databases with SMF data from system logger
+//*
+//   SET     WFMLIB=DVL.PP.FINDMBR.V012.LIB
+//   JCLLIB  ORDER=(DVL.PP.FINDMBR.V012.SETLIB,&WFMLIB)
+//   INCLUDE MEMBER=WFMSET
+//*
+//* Make control records
+//*
+//MKCTL    EXEC WFMPROC,PG=WFMCTLUP  ,PM='DATE(2022-11-21)'
+//LASTDATE DD DISP=SHR,DSN=&WFMSETLB(LASTDATE)
+//SMFLDATE DD DISP=SHR,DSN=&WFMSETLB(SMFLDATE)
+//SORTDATE DD DISP=SHR,DSN=&WFMSETLB(SORTDATE)
+//*
+//* Copy from logger
+//*
+//SMFCP    EXEC PGM=IFASMFDL
+//OUTDD1   DD UNIT=SYSDA,DISP=(,PASS),DSN=&&SMFXT,
+//            SPACE=(CYL,(2,20))
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD DISP=SHR,DSN=&WFMSETLB.(WFMSMFSL)
+//         DD DISP=SHR,DSN=&WFMSETLB.(SMFLDATE)
+//* Make VBS->VB
+//SMFVB    EXEC PGM=SORT
+//DFSMSG   DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=(OLD,DELETE),DSN=*.SMFCP.OUTDD1
+//SORTOUT  DD DISP=(,PASS),DSN=&&SMFVB,
+//            UNIT=SYSDA,SPACE=(CYL,(2,20)),
+//            RECFM=VB,LRECL=27994,BLKSIZE=0
+//SYSIN    DD DISP=SHR,DSN=&WFMLIB.(WFMSMFVB)
+//*
+//* Read SMF data, update dbs
+//*
+//DBUPD    EXEC WFMPROC,PG=WFMSMFUP,PM='MSGLVL(1)'
+//SMFIN    DD DISP=(OLD,DELETE),DSN=*.SMFVB.SORTOUT
+//*
+//* Run weekend catch-up
+//* WFM cross-ref database and VTOC, update DBS
+//*
+//DBW      EXEC PGM=IEFBR14
+//*BW      EXEC WFMPROC,PG=WFMRXINX
+//REXX DD *
+ say 'Run maintenance' date('w') date('n')
+ if date('w')='Sunday' then do
+   say 'Run weekend catch-up'
+   cc=WFMXRFDV('vol(**) list(dif) update(all) msglvl(1)')
+   exit 0
+ end
+ say 'No maintenance for today'
+//*

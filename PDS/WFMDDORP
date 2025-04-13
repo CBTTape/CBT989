@@ -1,0 +1,196 @@
+/*                                                                    rexx
+ WFM delete orphaned dataset (and associated member) records
+ Note that only mounted volumes are checked.
+
+ Parameters
+  MSGLVL(m)            >0 provides more informative messages.
+  TYPRUN(t)            RUN or SIM. RUN is default.
+
+ History
+  2022-11-02  New
+  2024-08-01  Use new WFMGSET.
+  2024-10-23  Small enhancement to the DB volume list.
+  2024-11-21  Bypass delete for non-mounted volumes.
+*/
+
+ parse source . . @me . @where .
+ if @me='ZZINSTRM' then @me='DBDORP'
+ parse value copies('0 ',30) with $llvl dsnal.0 mbral.0 .
+ zz=xmsg(@me 'Dsn orphan remover started' time())+xmsg()
+
+ /* parm parser */
+ parse value '0 RUN SYSIN' with $msglvl $typrun $sysin $vollist .
+ if arg(1)<>'' then do
+   arg p
+   say 'Parms:' p
+   p=translate(p,' ',',')
+   Interpret WfmParse(p,'msglvl(#) typrun(run sim) sysin(*) ',
+     'vollist(*)','$')
+   if err<>'' then exit xmsg(@me 'Parse error:' err)
+ end
+ ?sim=($typrun='SIM')
+ say '  Msglvl  ' $msglvl
+ say '  Vollist ' $vollist
+ say '  Typrun  ' $typrun
+ if $vollist<>'' & $vollist<>'FILTER' then,
+    exit xmsg('Invalid VOLLIST parameter',8)
+
+ Interpret WfmGSet()                /* set some globals */
+ if $wfmdd='' then exit xmsg('Database is not allocated ('cc')',8)
+ say ' DataDB  ' $WFMDB
+ sortpgm=WFMSortP()                             /* load sort program          */
+
+ /* Merge and test volsers from VTOC and db */
+ parse value WfmVoll('DB','volser',$vollist) with cc dbvols =0 . err
+ if cc<>0 then exit xmsg(@me 'Vollist generator rc' cc err)
+ zz=xmsg()+ListVol(dbvols,'DB vols..')+xmsg()
+
+ allbad=0
+ do dbvoln=1 to words(dbvols)
+   dbvol=word(dbvols,dbvoln)
+   say 'Checking vol:' dbvol
+   volbad=0
+   if \GetVtoc(dbvol) then iterate
+   if \GetDb(dbvol) then iterate
+   do dbln=1 to dbl.0
+     d=dbl.dbln              /* dataset */
+     if $msglvl>1 then say ' 'left(d,44) word('!notok ok',1+vtd.d)
+     if vtd.d then iterate   /* ok */
+     volbad=volbad+1
+     say ' 'd 'not on' dbvol
+     parse value allbad+1 d dbvol with allbad xdsn.allbad
+   end
+   say '# orphans for' dbvol':' volbad
+   say ''
+ end
+ xdsn.0=allbad
+ if allbad=0 then exit xmsg(@me 'Ended, no orphans found..')
+
+ if ?sim then do
+   say 'Commands generated for' allbad 'orphans'
+   say 'DELDSN ('
+   do n=1 to xdsn.0
+     say ' 'xdsn.n
+   end
+   say ')'
+   exit xmsg()+xmsg(@me 'simulate ended' time())
+ end
+
+ /* Run updater */
+ say ''
+ say 'Running updater for' allbad 'orphans'
+ queue 'DELDSN ('
+ do n=1 to xdsn.0
+   queue ' 'xdsn.n
+ end
+ queue ')'
+ drop xdsn.
+ cc=WfmDbUpd('sysin(stack) typrun('$typrun') msglvl('$msglvl')')
+ if cc<>0 then exit xmsg(@me 'Updater error' cc)+8
+
+ /* end */
+ exit xmsg()+xmsg(@me 'ended' time())
+
+/*
+ Get dsnames by volser
+*/
+GetDb:
+ arg dbv .
+ cc=RxVsamBa('Get dd('$wfmdd') stem(dbl.)' $ddbvsbkey,
+    'mask('dbv') pos('$ddbvolpos') endpos('$ddbvolpen')')
+ if cc<>0 then exit xmsg('List dsn db rc' cc+0 rxvberrm,8)
+ if dbl.0=0 then return xmsg('No datasets found in db')
+ Interpret,
+ "do dbln=1 to dbl.0;",
+   "parse var dbl.dbln" $dbdparse";",
+   "dbl.dbln=dsnname;",
+   "trace off;",
+ "end"
+ return ISort('dbl.')+1        /* 1 = true */
+
+/*
+ Get dsnames by vtoc
+*/
+GetVtoc:
+ arg dbv .
+ drop vtd. vtl.
+ vtd.=0
+ vtl.=0
+ zz=outtrap('vtl.')
+ address tso "VTOC ("dbv") LIMIT(DSO EQ PO) OR1(DSO EQ PE)",
+             "NOHEADING PRINT(NEW (DSNAME))"
+ zz=outtrap('off')
+ p='No PDS/E found on disk'
+ ?nm=(pos('NOT MOUNTED',vtl.1)>0)
+ if ?nm then p=dbv 'is not mounted'
+ if vtl.0<2 | ?nm then return xmsg(p)
+ do vtln=1 to vtl.0
+   d=word(vtl.vtln,1)      /* dataset */
+   vtd.d=1
+ end
+ drop vtl.
+ return 1
+
+/*
+ some subroutines
+*/
+DoSay: say arg(1);return 0
+XMsg: say arg(1);return word(arg(2) 0,1)
+XTso: trace off; zz=outtrap(word(arg(2) '$.',1))
+        address tso arg(1);zz=outtrap('off');xtsorc=rc;return rc
+
+IsMask:  /* return 1 (true) is mask */
+trace off
+ arg imp
+ return (pos('%',imp)>0) | (pos('*',imp)>0)
+ return 0
+
+ListVars:
+ arg lvl
+ do lvln=1 to words(lvl)
+   lvw=word(lvl,lvln)
+   say ' 'left(Upcase1(lvw),12) value(lvw)
+ end
+ return 0
+
+ListStem:
+ parse arg lsn .,lsh
+ lsn=translate(strip(lsn,'t','.'))'.'  /* ensure trailing dot */
+ if lsh<>'' then say lsh
+ lsnc=Value(lsn'0')    /* get count */
+ do lsnn=1 to lsnc
+   say ' 'value(lsn||lsnn)
+ end
+ return 0
+
+ListList:
+ parse arg llp,llh
+ upper llp
+ if llh<>'' then say llh
+ do llpn=1 to words(llp)
+   say ' 'word(llp,llpn)
+ end
+ return 0
+
+ListVol:
+ say arg(2)
+ v=arg(1)
+ if v='' then say ' *None*'
+ else do while v<>''
+   say ' 'subword(v,1,10)
+   v=delword(v,1,10)
+ end
+ return 0
+
+ISort: Interpret SortPgm; return 0               /* run sort                 */
+LowCase: return translate(arg(1),xrange('a','z'),xrange('A','Z'))
+Upcase1: return bitor(Lowcase(arg(1)),'40'x)
+Cvdt: Procedure
+ trace off
+ arg pd +8 pt
+ if pd='' then return ''
+ if left(pd,1)<50 then y='20'
+ else y='19'
+ if pt<>'' then pt=right(pt,5,'0')
+ return strip(y || translate(pd,'-','/') pt)
+@@

@@ -1,0 +1,81 @@
+/*                                                                 rexx
+ Load and parse control member.
+ The command is returned as an interpretable string.
+
+ History
+  2024-10-14  Fix bad data issue.
+  2024-10-23  Add ALLOW(NULL) parameter.
+  2024-10-24  Fix lpcda/lpcds selection error.
+*/
+ /* make interpretable program */
+ do n=1 to sourceline() until sourceline(n)='/*PGM*/';end
+ do m=n+1 to sourceline()
+   l=strip(sourceline(m),'b')
+   if left(l,2)='/*' & right(l,2)='*/' then iterate       /* comment      */
+   if right(pgm,1)=',' then pgm=left(pgm,length(pgm)-1) l /* continuation */
+   else pgm=pgm';'l
+ end
+ return substr(pgm,5)
+ /*
+ Load and parse control member - variable P has options.
+  Valid options:
+   DD(ddnameÝ(member)¨)     Load using ddname and optional member.
+   DA|DS(dsnameÝ(member)¨)  Load using datasetname and optional
+                            member.
+   ALLOW(NULL)              Accept null data. Default is that there
+                            must be data.
+  Variable names will be generated with '$' at front, i.e. $INCLUDE.
+ */
+/*PGM*/
+ parse value 0 with cc lpcdd lpcds lpcda lpcmb lpcallow
+ upper p
+ do while p<>''
+   parse var p v'('d p
+   zz=value('LPC'v,strip(d,'t',')'))
+ end
+ lpcds=word(lpcds lpcda,1)
+ if lpcdd lpcds='' then do
+   cc=1
+   say '***Missing required parm'
+ end
+ if cc=0 then do
+   if pos('(',lpcdd)>0 then do
+     parse var lpcdd lpcdd'('lpcmb .
+     cc=BpxWdyn('info dd('lpcdd') inrtdsn(lpcds)')
+     if cc<>0 then say '***Getds for' lpcdd 'failed'
+     lpcds=lpcds'('lpcmb')'
+   end
+   if lpcds<>'' then do
+     if pos('(',lpcds)>0 & pos(')',lpcds)=0 then lpcds=lpcds')'
+     cc=Bpxwdyn('alloc da('lpcds') shr rtddn(lpcdd)')
+     if cc<>0 then say '***Alloc' lpcds 'failed'
+   end
+ end
+ if cc=0 then do
+   address tso "execio * diskr" lpcdd "(stem l. finis)"
+   cc=rc
+   if lpcds<>'' then c=Bpxwdyn('free dd('lpcdd')')
+   if cc<>0 then say '***Read failed'
+   else do
+     p=''
+     do n=1 to l.0
+       if left(l.n,1)='*' | l.n='' then iterate
+       p=p space(l.n)
+     end
+     zp=p
+     do while p<>'' & cc=0
+       parse value strip(p) with k'('d')' p
+       k=strip(k)
+       if symbol(k)<>'LIT' then do
+         say '***Bad verb' k
+         cc=2
+       end
+       else if d='' & lpcallow<>'NULL' then do
+         say '***Missing data in' zp
+         cc=2
+       end
+       else _=Value('$'k,d)
+     end
+   end
+ end
+ drop lpcdd lpcds lpcmb

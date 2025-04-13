@@ -1,0 +1,23 @@
+)ATTR
+ +  type(text) color(green)
+ %  type(text) color(white)
+ "  type(text  ) color(blue  )
+ #  type(input ) color(turq  ) hilite(uscore) caps(on)
+ !  type(output) color(turq  )
+ @  type(output) color(yellow)
+)BODY EXPAND(\\)
+%\ \Make loadlib\ \+
+%Cmd =>_zcmd \ \+    +
++
++
+%Loadlib
++ Dsname    #loadlib                                    +
++ Volser    #loadvl+ If create and non-SMS
+
+" Note that the library will created if it does not exist.
+)INIT
+ if (&loadlib EQ &Z) &loadlib = &$wfmload
+)PROC
+ Ver (&loadlib,nb,dsname)
+ if (&loadvl EQ &Z) &loadvl = &$wfmdbv
+)END

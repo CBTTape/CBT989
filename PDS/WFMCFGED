@@ -1,0 +1,64 @@
+/*                                                           rexx
+ Edit various configuration members
+*/
+
+ /* set updates  */
+ wlib  = @where    /* WFM lib datasetname */
+ wlib  = 'SYS2.FINDMBR.V012.LIB'     /* WFM lib             */
+ WFMDSPF = 'SYS2.FINDMBR.V010'       /* new dataset preix   */
+ dsndb = 'SYS2.FINDMBR.V010.DSNDB'   /* new dataset db      */
+ mbrdb = 'SYS2.FINDMBR.V010.MBRDB'   /* new member db       */
+ /* end updates  */
+
+ parse source sys @what @me ddn @where .
+ Address Isredit "MACRO NOPROCESS (PRM)"
+ if rc=0 then exit Editmac()
+
+ "altlib act appl(exec) da('"@where"')"
+ if rc<>0 then exit xmsg('ALTLIB' @where 'rc' rc)
+
+ /* get member list */
+ zz=outtrap('ml.')
+ "Listds '"@where"' members"
+ zz=outtrap('off')
+
+ address ispexec
+ "control errors return"
+ do mln=7 to ml.0
+ /*say right(mln,3) '->'ml.mln */
+   m=word(ml.mln,1)
+   if left(m,1)='J' then do
+     "Edit dataset('"@where"("m")') macro("@me")"
+   end
+   if wordpos(m,'WFMSET WFMRXSET')>0 then do
+     "Edit dataset('"@where"("m")') macro("@me")"
+   end
+ end
+ address tso  "altlib deact appl(exec)"
+ exit 0
+
+XMsg: if arg(1)<>'' then say arg(1);return word(arg(2) 0,1)
+
+EditMac:
+ Address Isredit
+ "(mbr) = member"
+ zz=mbr
+ zz=wlib
+ if mbr='WFMSET' | mbr='WFMRXSET' then do
+   "change 'SYS2.FINDMBR.V010.PARM' '"WFMDSPF".PARM' first"
+   "change 'SYS2.FINDMBR.V010.DSNDB' '"dsndb"' first"
+   "change 'SYS2.FINDMBR.V010.MBRDB' '"mbrdb"' first"
+   "change 'SYS2.FINDMBR.V010'    '"WFMDSPF"' all"
+   "change 'DVL.PP.FINDMBR.V010'  '"WFMDSPF"' all"
+   "save"
+ end
+
+ if left(mbr,1)='J' then do
+   "change 'SYS2.FINDMBR.V012.LIB' '"wlib"' first"
+   "change 'SYS2.FINDMBR.V010'   '"WFMDSPF"' all"
+   "change 'DVL.PP.FINDMBR.V010' '"WFMDSPF"' all"
+   "save"
+ end
+
+ "cancel"
+ exit 0

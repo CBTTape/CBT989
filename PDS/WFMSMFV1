@@ -1,0 +1,13 @@
+* Copy SMF for the FindMbr app
+* Sort is descending to allow for retaining of last vol/dsn
+* combination.
+*   type 15 update if permanent
+*   type 17 scratch
+*   type 18 rename
+*   type 61 catalog if non-vsam
+ OPTION DYNALLOC,EQUALS,VLSCMP,VLSHRT
+ SORT FIELDS=(11,4,BI,D,7,4,BI,D)
+ INCLUDE COND=((6,1,BI,EQ,15,AND,43,1,BI,EQ,X'20'),
+            OR,(6,1,BI,EQ,17),
+            OR,(6,1,BI,EQ,18),
+            OR,(6,1,BI,EQ,61,AND,120,1,CH,EQ,C'A'),

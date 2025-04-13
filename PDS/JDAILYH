@@ -1,0 +1,49 @@
+//WFM7DLYH JOB (1),'WFM-new-day',
+//*  RESTART=SMFCP,
+//   CLASS=A,MSGCLASS=T,COND=(5,LT),REGION=128M
+//*
+//* Copy smf records from history
+//*
+//   SET     WFMLIB=DVL.PP.FINDMBR.V009.LIB
+//   SET     WFMPRM=DVL.PP.FINDMBR.V009.PARM
+//   JCLLIB  ORDER=(&WFMLIB)
+//   INCLUDE MEMBER=WFMSET
+//*
+//* Make control records
+//*
+//MKCTL    EXEC WFMPROC,PG=WFMCTLUP  ,PM='DATE(2022-11-20)'
+//LASTDATE DD DISP=SHR,DSN=&WFMSETLB(LASTDATE)
+//SMFLDATE DD DISP=SHR,DSN=&WFMSETLB(SMFLDATE)
+//SORTDATE DD DISP=SHR,DSN=&WFMSETLB(SORTDATE)
+//*
+//* Copy from SMF history
+//*
+//SMFCP    EXEC PGM=SORT
+//DFSMSG   DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DISP=SHR,DSN=&WFMSMFH,GDGORDER=FIFO
+//SORTOUT  DD DISP=(,PASS),DSN=&&SMF,
+//            UNIT=SYSDA,SPACE=(CYL,(2,30),RLSE),
+//            RECFM=VB,LRECL=27904,BLKSIZE=0
+//SYSIN    DD DISP=SHR,DSN=&WFMLIB.(WFMSMFV1)
+//         DD DISP=SHR,DSN=&WFMSETLB.(SORTDATE)
+//*
+//* Read SMF data, update dbs
+//*
+//DBUPD    EXEC WFMPROC,PG=WFMSMFUP,PM='MSGLVL(0)'
+//SMFIN    DD DISP=OLD,DSN=&&SMF
+//VOLSEL   DD DISP=SHR,DSN=&WFMSETLB.(VOLSEL)
+//*
+//* Run weekend catch-up
+//* WFM cross-ref database and VTOC, update DBS
+//*
+//DBW      EXEC WFMPROC,PG=WFMRXINX
+//REXX DD *
+ say 'Run maintenance' date('w') date('n')
+ if date('w')='Sunday' then do
+   say 'Run weekend catch-up'
+   cc=WFMXRFDV('vol(**) list(dif) update(all) msglvl(0)')
+   exit 0
+ end
+ say 'No maintenance for today'
+//*

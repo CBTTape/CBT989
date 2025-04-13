@@ -1,0 +1,46 @@
+/* ------------------------------------------------------------ REXX
+
+ name  : RXINSTRX
+ desc  : Allow a REXX program to be supplied instream, instead of
+         having to be a pds member.
+ parms :
+   REXXDD(ddname)
+   other     send to the program
+
+ ------------------------------------------------------------------ */
+
+ Address TSO
+ arg prm
+ parse var prm p1 'REXXDD('rxdd .')' p2
+ if rxdd='' then parse value p1 p2 with p1 'REXXDD='rxdd  p2
+ prm=space(p1 p2)
+ rxdd=word(rxdd 'REXX',1)
+
+ /*-------------------------------------------------------------------
+                  write inline REXX to temp pds
+ --------------------------------------------------------------------*/
+ cc=BpxWdyn('info dd(sysexec) inrtdsn(execdsn)')
+ if cc<>0 then call close 8 'SYSEXEC info failed' cc
+ cc=Bpxwdyn('alloc da('execdsn'(zzinstrm)) shr rtddn(rxmbrdd)')
+ if cc<>0 then call close 8 'Alloc outmbr failed' cc
+ "Execio * diskr" rxdd "(stem data. finis)"
+ if rc<>0 then call close 8 'Read DD' rxdd 'failed' rc
+ "execio" data.0 "diskw" rxmbrdd "(stem data. finis)"   /* save */
+ if rc<>0 then call close 8  "Write temp failed" rc
+
+ /*--------------------------------------------------------------------
+                         Run pgm
+ --------------------------------------------------------------------*/
+ "%zzinstrm" prm
+ if datatype(rc)='NUM' then if rc<>0 then call close rc
+ call close 0
+
+ /*-------------------------------------------------------------------
+                                terminate
+ --------------------------------------------------------------------*/
+Close:
+ cc=BpxWdyn("free dd("rxinddn")")
+ parse arg _rc _msg
+ if _msg<>'' then say _msg
+ _rc=word(_rc 0,1)
+ Exit _rc
